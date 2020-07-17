@@ -22,7 +22,7 @@ from random import randint
 
 #### Main class
 class document_similarity():
-    ### prepare the input data
+    ### Sub-class: prepare the input data
     class prep_data:
         """sub-class for preping the data before the string distance calculations"""
         ### some variables
@@ -74,111 +74,108 @@ class document_similarity():
             stand_lang = pd.merge(dta_all, langs_data, how = 'inner', on = "source_lang_alpha2")
             return stand_lang
         ### function for filtering decision docs
-        def filter_decision_doc(self, case_id, source_lang_alpha3b, judgment = True, pref_original = True, last_resort = False):
+        def filter_decision_doc(self, case_id, source_lang_alpha3b, judgment = True, pref_original = True, last_resort_isocode = "FRE"):
+            # case id to app number
+            appno = case_id.split("_")[0].replace("/", "_")
+            # lang to caps
+            lang = source_lang_alpha3b.upper()
+            ### DOC type
             ## look up for rulings, given language and appno
             if judgment:
                 files = self.rulings_files
             else:
                 print("\nGoing with the communicated notices\n")
                 files = self.com_files
-            ## filter by appno
-            if not last_resort:
-                filter_appno = list(filter(lambda s: re.search(case_id, s), files))
-                if len(filter_appno) > 0:
-                    ## check if original language exists
-                    filter_og = list(filter(lambda s: re.search(source_lang_alpha3b, s), filter_appno))
-                    ## check if english translation exists
-                    filter_eng = list(filter(lambda s: re.search("ENG", s), filter_appno))
-                    ## filter in the original language
-                    if pref_original and len(filter_og) > 0:
-                        ## stick with the original
-                        out = pd.DataFrame([{'doc_path':filter_og[0], 'source_lang_alpha3_b': source_lang_alpha3b, "case_id": case_id}])
-                    elif len(filter_eng) > 0:
-                        ## return the english one
-                        print("No files in %s"%source_lang_alpha3b + "\nGoing to use the english version instead\n%")
-                        out = pd.DataFrame([{'doc_path':filter_eng[0], 'source_lang_alpha3_b':"eng", "case_id": case_id}])
-                    else:
-                        out = pd.DataFrame([{'doc_path':None,'source_lang_alpha3_b':None, "case_id": case_id}])
-                else:
-                    out = pd.DataFrame([{'doc_path':None,'source_lang_alpha3_b':None, "case_id": case_id}])
-                    print(case_id.replace("_", "/") + "\nNo files in %s"%source_lang_alpha3b + " or in english!\nNo way of comparing the texts. Returning a None value\n------\n")
+            ## Filtering the docs
+            # first filter: by appno
+            filter_appno = list(filter(lambda s: re.search(appno, s), files))
+            if len(filter_appno) == 0:
+                # no match with appno, stop and return a none
+                out = pd.DataFrame([{'doc_path':None,'source_lang_alpha3_b':None, "case_id": case_id}])
+                print(case_id.replace("_", "/") + "\nNo files in %s"%source_lang_alpha3b + " or in english!\nNo way of comparing the texts. Returning a None value\n------\n")
             else:
-                ## there is no english nor in the main language.
-                # as before, filter appno
-                filter_appno = list(filter(lambda s: re.search(case_id, s), files))
-                if len(filter_appno) > 0:
-                    ## check if French exists (second officia language, very likely and good for translation)
-                    filter_fre = list(filter(lambda s: re.search("FRE", s), filter_appno))
-                    if filter_fre > 0:
-                        print("No files in English nor in %s"%source_lang_alpha3b + "\nGoing to use the French version instead\n%")
-                        out = pd.DataFrame([{'doc_path':filter_fre[0], 'source_lang_alpha3_b':"to_translate", "case_id": case_id}])
-                    # failing, use any ruling for translation. Random choice.
-                    elif len(filter_appno) > 0:
-                        seed(1234)
-                        print("No files in English nor in %s"%source_lang_alpha3b + "\nGoing to use the any available version instead\n%")
-                        ## assigning already the translation language
-                        out = pd.DataFrame([{'doc_path':choice(filter_appno), 'source_lang_alpha3_b':"to_translate", "case_id": case_id}])
-                    else:
-                        ## nothing
-                        out = pd.DataFrame([{'doc_path':None,'source_lang_alpha3_b':None, "case_id": case_id}])
+                # case doc is present, go on...
+                # second filter: langs
+                # check if original language exists
+                filter_og = list(filter(lambda s: re.search(lang, s), filter_appno))
+                # check if english translation exists
+                filter_eng = list(filter(lambda s: re.search("ENG", s), filter_appno))
+                # last resort, to be translated to english...
+                filter_lr = list(filter(lambda s: re.search(last_resort_isocode, s), filter_appno))
+                # Assign the doc metadata given langs and user choices
+                # if available and preferred, assign local language translation
+                if pref_original and len(filter_og) > 0:
+                     out = pd.DataFrame([{'doc_path':filter_og[0], 'source_lang_alpha3_b': source_lang_alpha3b, "case_id": case_id}])
+                # missing and available, assign english translation
+                elif len(filter_eng) > 0:
+                    print("No files in %s"%source_lang_alpha3b + "\nGoing to use the english version instead\n%")
+                    out = pd.DataFrame([{'doc_path':filter_eng[0], 'source_lang_alpha3_b':"eng", "case_id": case_id}])
+                # again, missing go for the translation "of last resort"
+                elif len(filter_lr) > 0:
+                    print("No files in English nor in %s"%source_lang_alpha3b + "\nGoing to use " + last_resort_isocode +  " version instead and translating it to english\n%")
+                    out = pd.DataFrame([{'doc_path':filter_lr[0], 'source_lang_alpha3_b':"to_translate", "case_id": case_id}])
+                # No match, return an NA
                 else:
+                    # no match with appno, stop and return a none
                     out = pd.DataFrame([{'doc_path':None,'source_lang_alpha3_b':None, "case_id": case_id}])
                     print(case_id.replace("_", "/") + "\nNo files in %s"%source_lang_alpha3b + " or in english!\nNo way of comparing the texts. Returning a None value\n------\n")
             return out
-        ### find the the decision original language or in english
-        def find_decisions(self, case_id, source_lang_alpha3b, pref_original = True, debug = True):
-            # case id to app number
-            appno = case_id.split("_")[0].replace("/", "_")
-            # lang to caps
-            lang = source_lang_alpha3b.upper()
-            ## first attempt, judgments
-            out = self.filter_decision_doc(case_id = appno, source_lang_alpha3b = lang, judgment = True)
-            if isinstance(out['doc_path'][0], str):
-                to_return = out
-            else:
-                ## second attempt, comunications
-                out = self.filter_decision_doc(case_id = appno, source_lang_alpha3b = lang, judgment = False)
-                if isinstance(out['doc_path'][0], str):
-                    to_return = out
-                else:
-                    ## third attempt, last resort (see above) with judgments
-                    out = self.filter_decision_doc(case_id = appno, source_lang_alpha3b = lang, judgment = True, last_resort = True)
-                    if isinstance(out['doc_path'][0], str):
-                        to_return = out
-                    ## fourth attemp, last resort with communications
-                    else:
-                        out = self.filter_decision_doc(case_id = appno, source_lang_alpha3b = lang, judgment = False, last_resort = True)
-                        if isinstance(out['doc_path'][0], str):
-                            to_return = out
-                        else:
-                             to_return = out
-                             print(appno.replace("_", "/") + "\nNo files in %s"%lang + " or in english!\nNo way of comparing the texts. Returning a None value\n------\n")
-            return to_return
+        ### function for loading the rulings metadata
+        def load_rulings_metadata(self, debug = True):
+            ## logfile
+            # start the log file. Remove existing one
+            logfile = self.prep_data_logfile
+            if os.path.isfile(logfile):
+                os.remove(logfile)
+            ### For each unique case id-lang pair available in our articles_data, pull the decision doc df
+            ## Get articles data
+            articles_data = self.load_articles()
+            ## keep unique case-lang pairs
+            unique_meta = articles_data.drop_duplicates(subset = ['case_id', 'source_lang_alpha3_b'])
+            ## start the loop
+            #containers
+            df_list = []
+            missing_list = []
+            for index, row in unique_meta.iterrows():
+                ### pull the decision doc metadata
+                decisions_df = self.filter_decision_doc(case_id = row['case_id'], source_lang_alpha3b = row['source_lang_alpha3_b'])
+                if len(decisions_df[decisions_df.doc_path.notnull()]) < 1:
+                    ## no doc retrieved
+                    missing_list.append(row['case_id'])
+                ## append to df list
+                df_list.append(decisions_df)
+            ## add missing cases to logfile
+            with open(logfile, "w") as output:
+                output.write(str("Missing decisions for cases:\n\n" + "\n".join(list(set(missing_list)))))
+            # concatenate and return
+            out = pd.concat(df_list)
+            return out
         ### Translation funs
         ## status of vpn
-        def vpn_status():
+        def vpn_status(self):
             p = subprocess.Popen("expressvpn status", stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
             return list([str(v).replace('\\t', ' ').replace('\\n', ' ').replace('b\'', '').replace('\'', '')
                         .replace('b"', '')
                          for v in iter(p.stdout.readline, b'')])
         ## random vpn
-        def random_vpn():
+        def random_vpn(self):
             wrapper.random_connect()
             return
         ## translate
-        def translate_article(dataset = None):
+        def translate_article(self, dataset = None):
             ## instantiate translator class
             translator = Translator(user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36")
             ## check if connected to a vpn
-            if "Connected to" not in "\n".join(vpn_status()):
+            if "Connected to" not in "\n".join(self.vpn_status()):
                 ## connect to a random vpn
-                random_vpn()
+                self.random_vpn()
                 sleep(randint(10, 20))
-            ## loop around each paragraph
-            input_pars = list(filter(None, dataset.text_paragraphs.tolist()))
+            ## concatenate the paragraphs to make the translation faster
+            input_pars = "\n".join(list(filter(None, dataset.text_paragraphs.tolist())))
             ### translation
-            max_attempts = 3
+            max_attempts = 5
             attempts = 0
+            print("\ntranslating " + dataset.doc_path[0] + '\n')
             while True:
                 attempts += 1
                 try:
@@ -186,6 +183,7 @@ class document_similarity():
                     # source: automatic detection
                     # destination: "en"
                     translated = translator.translate(input_pars, dest='en')
+                    sleep(randint(1, 5))
                     break
                 except BaseException as e:
                     print("\ntranslation did not work, trying again\n")
@@ -200,21 +198,77 @@ class document_similarity():
                        ## rotate vpn and try again
                        if "JSONDecodeError" in error_message:
                         # rotate ip
-                        random_vpn()
+                        self.random_vpn()
                         sleep(randint(40, 60))
                        try:
                            ## google translate only allows text up to 15000, in the website it is 3900, truncate the main text to 3700       
+                           input_pars = input_pars[:3000]
                            translated = translator.translate(input_pars, dest='en')
                        except:
                            translated = None
                            break
             ## turn translation object to text
             if isinstance(translated, list):
-                translated_pars = [par.text for par in translated]
-                translated_text = "\n".join(translated_pars)
+                translated_text = translated.text
             else:
                 translated_text = None
             return translated_text
+        ### Load rulings text data
+        def load_rulings(self, debug = True):
+            ## load the rulings metadata
+            rulings_metadata = self.load_rulings_metadata(debug = False)
+            ### For each ruling doc, load the respective json dataset
+            ## if not in engish or local language, translate it
+            # container
+            rulings_container = []
+            # start the loop
+            for index, row in  rulings_metadata.iterrows():
+                ## get some relevant parameters
+                ## load it to a pandas df
+                df_raw = pd.read_json(row['doc_path']).rename(columns = {"case_id":"appno"})
+                df_raw['case_id'] = row['case_id']
+                ## if "to_translate", translate and concatenate it
+                if row['source_lang_alpha3_b'] == "to_translate":
+                    try:
+                        df_raw['text'] = self.translate_article(dataset = df_raw)
+                    except:
+                        df_raw['text'] = None
+                    df_raw['translated'] = "1"
+                    df_raw['doc_lang'] = "ENG"
+                else:
+                    ## concatenate the paragraphs into "text" col. Remove white space.
+                    df_raw['text'] = "\n".join(list(filter(None, df_raw.text_paragraphs)))
+                    df_raw['translated'] = "0"
+                ## keep unique fils and dorp some cols
+                df_raw = df_raw.drop_duplicates(subset = ['file']).drop(columns = ['text_paragraphs'])
+                df_raw = df_raw.rename(columns = {'appno':'appno',
+                                                  'doc_type':'ruling_doc_type',
+                                                  'doc_lang': 'ruling_doc_lang',
+                                                  'file':'ruling_doc_file',
+                                                  'text':'ruling_text',
+                                                  'translated':'ruling_translated'})
+                ## append to container
+                rulings_container.append(df_raw)
+                if debug:
+                    print(df_raw)
+            ## concatenate and return
+            out = pd.concat(rulings_container)
+            return out
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         ### main: load raw similarity input
         def load_similarity_input(self, articles_data = None, debug = True):
             ### logfile
@@ -226,14 +280,13 @@ class document_similarity():
             if not isinstance(articles_data, pd.core.frame.DataFrame):
                 articles_data = self.load_articles()
             ### Load ruling data frames
-            ## use unique case_ids and anguage pairs for efficiency reasons
-            unique_ids = articles_data.drop_duplicates(subset = ["case_id", "source_lang_alpha3_b"])
             ## for each appno and language, load a decision_dataset
             df_list = []
             missing_list = []
-            for index, row in unique_ids.iterrows():
+            for index, row in articles_data.iterrows():
                 cur_id = row['case_id']
                 lang = row['source_lang_alpha3_b']
+                article_id = row['article_id']
                 ## first, try to get a judgment
                 try:
                     decisions_df = self.find_decisions(case_id = cur_id,
@@ -243,6 +296,8 @@ class document_similarity():
                             missing_list.append(cur_id)
                     if debug:
                         print(decisions_df)
+                    ## inner_join
+                    decisions_df['article_id'] = article_id
                     df_list.append(decisions_df)
                 except:
                     if debug:
@@ -262,21 +317,26 @@ class document_similarity():
                         df_raw = pd.read_json(path, encoding = "utf-8")
                         ## if "to_translate", translate and concatenate it
                         if lang == "to_translate":
-                            df_raw['text'] = translate_article(dataset = df_raw)
+                            try:
+                                df_raw['text'] = self.translate_article(dataset = df_raw)
+                            except:
+                                df_raw['text'] = None
                             df_raw['translated'] = "1"
-                            df_raw['source_lang_alpha3_b'] = "ENG"
+                            df_raw['doc_lang'] = "ENG"
                         else:
                             ## concatenate the paragraphs into "text" col. Remove white space.
                             df_raw['text'] = "\n".join(list(filter(None, df_raw.text_paragraphs)))
                             df_raw['translated'] = "0"
                         ## keep unique fils and dorp some cols
                         df_raw = df_raw.drop_duplicates(subset = ['file']).drop(columns = ['text_paragraphs'])
-                        df_raw = df_raw.add_prefix("ruling_").rename(columns = {'ruling_case_id':'appno',
-                                                                                'ruling_doc_lang': 'source_lang_alpha3_b'})
+                        df_raw = df_raw.rename(columns = {'appno':'appno',
+                                                          'doc_type':'ruling_doc_type',
+                                                          'doc_lang': 'ruling_doc_lang',
+                                                          'file':'ruling_doc_file'})
                         # standardize lang
                         df_raw.source_lang_alpha3_b  = df_raw.source_lang_alpha3_b.str.lower()
                         ## inner join it with the artices data
-                        final_df_raw = pd.merge(articles_data, df_raw, how = 'left', on = ['appno', 'source_lang_alpha3_b'])
+                        final_df_raw = pd.merge(df_raw, articles_data, how = 'inner', on = ['article_id'])
                         ## generate the "text original" var = title + leading paragraph + main text
                         text_og_list = []
                         for index, row in final_df_raw.iterrows():
@@ -294,6 +354,8 @@ class document_similarity():
                         final_df = final_df_raw.rename(columns = {'text': 'article_text_translated'})
                         # append
                         final_df_list.append(final_df)
+                        if debug:
+                            print(final_df)
             ## concatenate into a single dataframe
             df_all = pd.concat(final_df_list).drop_duplicates(subset = ["article_id", "ruling_file", "appno", "case_id"])
             return df_all      
