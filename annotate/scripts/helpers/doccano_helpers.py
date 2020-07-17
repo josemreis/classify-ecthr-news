@@ -12,6 +12,7 @@ from pandas.io.json import json_normalize
 import ast
 import re
 import os
+import io
 
 #### Main functions
 ## log in to the deccano's api
@@ -159,7 +160,7 @@ def get_labeled_docs(client, project_id):
     resp.raise_for_status()
     ## parse csv into pandas
     parsed = pd.read_csv(io.StringIO(resp.text))
-    if parsed == "pandas.core.frame.DataFrame":
+    if isinstance(parsed, pd.core.frame.DataFrame):
         return parsed
     else:
         return "no data retrieved"

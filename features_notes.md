@@ -1,10 +1,11 @@
 # Main features
 
-  1. 1-5 ngrams (stemmed - ?, past-tense... -, stop-words removed) represented by their IDF or TF-IDF (?? see below); numerical
-  2. Any match between country mentioned in the document id and countries in the article; dummy
-  3. date distance; int
-  4. document similarity; as in my working-paper "transparency in international law..."; int
-  6. source (dummy var); some sources are expected to be more likely to cover echr; dummy 
+  1. 1-5 ngrams (stemmed - ?, past-tense... -, stop-words removed) represented by their IDF or TF-IDF (?? see below); (num)
+  2. Any match between country mentioned in the document id and countries in the article; (dummy)
+  3. date distance; (int)
+  4. document similarity; as in my working-paper "transparency in international law..."; (int)
+  6. source (dummy var); some sources are expected to be more likely to cover echr; (dummy)
+  7. Number of characters in the article; (int)
 
 ## Sources for case description
 
@@ -36,13 +37,18 @@ We will compare the similarity between the decision and the news article.
   4. Compute the similarity for each dyad - cosine similarity seems right;
 
  * Questions:
- - TF-IDF v. IDF? e.g. ECHR would get  a very low score, that is not necessarily good.
+    - TF-IDF v. IDF? e.g. ECHR would get  a very low score, that is not necessarily good.
+    - Original language v. original language of the article or just the translated ones?
 
 
 #### NER-based
 
   1. For each ruling and news article extract all named entities using the same NER algorithm;
-  2. Compare the vectors of named entities to measure overlapp - jaccard distance maybe?
+  2. Compare the vectors of named entities to measure overlap - jaccard distance maybe?
+
+  * Questions:
+     - TF-IDF v. IDF? e.g. ECHR would get  a very low score, that is not necessarily good.
+     - Original language v. original language of the article or just the translated ones?
 
 #### Full documents
 
