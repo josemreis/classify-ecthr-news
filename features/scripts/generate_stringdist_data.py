@@ -14,9 +14,7 @@ import pycountry
 import requests
 import re
 #### Main class
-class document_similarity(metric):
-    def __init__(self, metric):
-        self.metric = metric
+class document_similarity():
     ### prepare the input data
     class prep_data:
         """sub-class for preping the data before the string distance calculations"""
