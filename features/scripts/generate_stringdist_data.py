@@ -88,7 +88,7 @@ class document_similarity:
                 ## filter french
                 if pref_original and len(filter_og) > 0:
                     ## stick with the original
-                    out = pd.DataFrame([{'doc_path':filter_og[0], 'lang':lang}])
+                    out = pd.DataFrame([{'doc_path':filter_og[0], 'lang':lang, "case_id": case_id}])
                 elif len(filter_eng) > 0:
                     ## return the english one
                     print("No files in %s"%lang + "\nGoing to use the english version instead\n%")
@@ -100,5 +100,5 @@ class document_similarity:
             else:
                 out = pd.DataFrame([{'doc_path':None,'lang':None, "case_id": case_id}])
                 print(appno.replace("_", "/") + "\nNo files in %s"%lang + " or in english!\nNo way of comparing the texts. Returning a None value\n------\n")
-                    
+            return out
     
