@@ -13,7 +13,6 @@ from random import choices, seed
 import pycountry
 import requests
 import re
-
 #### Main class
 class document_similarity:
     ### prepare the input data
@@ -29,6 +28,7 @@ class document_similarity:
             self.rulings_docs_path = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/case_docs_data/rulings_data/json' 
             self.rulings_files = glob(self.rulings_docs_path + "/*JUD*")
             self.com_files = glob(self.rulings_docs_path + "/*CL*")
+            self.prep_data_logfile = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/scripts/logs/prep_input.log'
         ### load the labeled data
         def load_labels(self):
             ## Log in to the client
@@ -67,28 +67,38 @@ class document_similarity:
             stand_lang = pd.merge(dta_all, langs_data, how='inner', on = "source_lang_alpha2")
             return stand_lang
         ### find the the decision original language or in english
-        def find_decisions(self, case_id, source_lang_alpha3b, judgment = True, pref_original = True):
+        def find_decisions(self, case_id, source_lang_alpha3b, judgment = True, pref_original = True, debug = True):
             # case id to app number
             appno = case_id.split("_")[0].replace("/", "_")
             # lang to caps
             lang = source_lang_alpha3b.upper()
             ## look up for rulings, given language and appno
             if judgment:
-                ## filter by appno
-                filter_appno = list(filter(lambda s: re.search(appno, s), self.rulings_files))
+                files = self.rulings_files
+            else:
+                print("\nGoing with the communicated notices\n")
+                files = self.com_files
+            ## filter by appno
+            filter_appno = list(filter(lambda s: re.search(appno, s), files))
+            if len(filter_appno) > 0:
                 ## check if original language exists
-                
-                relevant_files = []
-                for cur_file in rulings_files:
-                    # get lang
-                    file_lang = 
-            
-        
+                filter_og = list(filter(lambda s: re.search(lang, s), filter_appno))
+                ## check if english translation exists
+                filter_eng = list(filter(lambda s: re.search("ENG", s), filter_appno))
+                ## filter french
+                if pref_original and len(filter_og) > 0:
+                    ## stick with the original
+                    out = pd.DataFrame([{'doc_path':filter_og[0], 'lang':lang}])
+                elif len(filter_eng) > 0:
+                    ## return the english one
+                    print("No files in %s"%lang + "\nGoing to use the english version instead\n%")
+                    out = pd.DataFrame([{'doc_path':filter_og[0], 'lang':"eng", "case_id": case_id}])
+                else:
+                    ## return the english one
+                    print("No files in %s"%lang + " or in english!\nNo way of comparing the texts. Returning a None value.\nAnd adding it to the log file at ")
+                    out = pd.DataFrame([{'doc_path':None,'lang':None, "case_id": case_id}])
+            else:
+                out = pd.DataFrame([{'doc_path':None,'lang':None, "case_id": case_id}])
+                print(appno.replace("_", "/") + "\nNo files in %s"%lang + " or in english!\nNo way of comparing the texts. Returning a None value\n------\n")
+                    
     
-prepper = document_similarity.prep_data()
-
-rulings_files = prepper.rulings_files
-
-re.search("(?<=[A-Z]\_).+?(?=\_[0-9])", current_file).group(0)
-
-test = list(set([re.search("(?<=[A-Z]\_).+?(?=\_[0-9])", current_file).group(0) for current_file in prepper.rulings_files]))
