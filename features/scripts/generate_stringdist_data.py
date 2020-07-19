@@ -19,11 +19,12 @@ from expressvpn import wrapper
 import subprocess
 from time import sleep
 from random import randint
+import stanza
 
 #### Main class
 class document_similarity():
     ### Sub-class: prepare the input data
-    class prep_data:
+    class prep_data():
         """sub-class for preping the data before the string distance calculations"""
         ### some variables
         def __init__(self):
@@ -36,6 +37,8 @@ class document_similarity():
             self.rulings_files = glob(self.rulings_docs_path + "/*JUD*")
             self.com_files = glob(self.rulings_docs_path + "/*CL*")
             self.prep_data_logfile = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/scripts/logs/prep_input.txt'
+            self.stanza_models = '/home/jmr/stanza_resources/*' 
+
         ### load the labeled data
         def load_labeled_articles(self):
             ## Log in to the client
@@ -74,17 +77,17 @@ class document_similarity():
             stand_lang = pd.merge(dta_all, langs_data, how = 'inner', on = "source_lang_alpha2")
             return stand_lang
         ### load articles data
-        def load_articles_data(self):
+        def load_articles(self):
             ## load the labeled articles
-            arts_labeled = self.load_labeled_articles().drop_duplicates(subset = "article_id")
+            arts_labeled = self.load_labeled_articles().drop_duplicates(subset = ["article_id", "case_id"])
             ## load all articles 
-            arts_all = self.load_corpus().drop_duplicates(subset = "article_id")
+            arts_all = self.load_corpus().drop_duplicates(subset = ["article_id", "case_id"])
             ## combine them
             merged = pd.merge(arts_all, arts_labeled, how = "left", on = ['article_id', 'case_id', 'judgment_date', 'date_published', 'text'])
             ## transform the label variable into dummy            
             merged['ecthr_label'] = np.where(merged.label_name == 'ecthr_ruling', 1, np.where(merged.label_name == 'not_ecthr_ruling', 0, None))
             # "is_labeled" var
-            merged['is_labeled'] = np.where(merged_test.label_name.isnull(), 0, 1)
+            merged['is_labeled'] = np.where(merged.label_name.isnull(), 0, 1)
             return merged
         ### function for filtering decision docs
         def filter_decision_doc(self, case_id, source_lang_alpha3b, judgment = True, pref_original = True, last_resort_isocode = "FRE"):
@@ -274,17 +277,46 @@ class document_similarity():
             ## concatenate and return
             out = pd.concat(rulings_container)
             return out
+    
+    ## sub-class: functions for pre-processing the strings for the string distance analyses
+    # Relevant processing: (i) tokenization and (ii) turning strings into vectors    
+    class pre_process():
         
-        
+        ## tokenize
+        def tokenize(lang = None, text = None):
+            ## turn lang into isocode alpha 2
+            lang = pycountry.languages.lookup(lang).alpha_2
+            ## check if the language model exists, if not download it
+            if not "/home/jmr/stanza_resources/" + lang in glob('/home/jmr/stanza_resources/*'):
+                stanza.download(source_lang_alpha2)
+            ## start the stanza pipeline for tokenizing with sentence segmentation as well as pos-tagging
+            nlp = stanza.Pipeline(lang=lang, processors='tokenize,mwt,pos', tokenize_no_ssplit=False)
+            ## tokenize
+            doc = nlp(text)
+            # for each sentence, get all tokens as well as their pos-tag and other morphological info
+            df_raw = pd.DataFrame()
+            for i, sentence in enumerate(doc.sentences):
+                ## for each word extract mofphological info plus add ids, turn all to df
+                for j, current_word in enumerate(sentence.words):
+                    word_df = json_normalize(current_word.to_dict()).drop(columns = "id").add_prefix("token_")
+                    word_df['sentence_id'] = i + 1
+                    word_df['word_id'] = j + 1
+                    word_df['token_id'] = str(i + 1) + "_" + str(j + 1)
+                    ## concatenate
+                    df_raw = pd.concat([df_raw, word_df])
+            return df_raw
 ### test
 if __name__  == "__main__":
-    
+    ## instantiate prep data class
     prep = document_similarity.prep_data()  
     ## load articles
-    arts_labeled = prep.load_labeled_articles()    
-    arts_all = prep.load_articles()
+    #articles_raw = prep.load_articles()
     # load rulings
-    #rulings_loaded = prep.load_rulings()    
+    #rulings_raw = prep.load_rulings()  
+    
+    ## instantiate pre_process class
+    proc = document_similarity.pre_process()
+    
         
         
         
