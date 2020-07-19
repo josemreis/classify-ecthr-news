@@ -285,7 +285,7 @@ class document_similarity():
         def __init__(self):
             self.stanza_models = [x for x in glob('/home/jmr/stanza_resources/*') if "json" not in x]
         ## tokenize
-        def tokenize(self, lang = None, text = None, case_id = None, article_id = None):
+        def tokenize(self, lang = None, text = None, case_id = None, article_id = None, use_gpu=True):
             ## turn lang into isocode alpha 2
             lang = pycountry.languages.lookup(lang).alpha_2
             ## check if the language model exists, if not download it
@@ -305,12 +305,48 @@ class document_similarity():
                     word_df['word_id'] = j + 1
                     word_df['token_id'] = str(i + 1) + "_" + str(j + 1)
                     ## concatenate
-                    df_raw = pd.concat([df_raw, word_df])
+                    df_raw = pd.concat([df_raw, word_df])                    
             if isinstance(case_id, str):
                 df_raw['case_id'] = case_id
             if isinstance(article_id, str):
-                df_raw['article_id'] = case_id
+                df_raw['article_id'] = article_id
+            ## add the case_id to the token _id
+            df_raw['token_id'] = case_id + "_" + df_raw['token_id']
             return df_raw
+        ## normalize
+        def normalize(self, tokenized_df, max_ngram = 4, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"]):
+            ## filter out unwanted tokens
+            filtered = tokenized_df[tokenized_df.token_upos.isin(keep_upos)]
+            ## turn to lower
+            filtered.token_text = filtered.token_text.apply(lambda x: x.lower())
+            ## remove extra punctuation which was missed by the pos-tag
+            filtered.token_text = filtered.token_text.apply(lambda x: re.sub('[!"#§$%&\'()*+,.:;<=>?@[\\]^_{|}~]', '', x))
+            ## keep strings with at least one
+            pp = filtered[~filtered.token_text.apply(lambda x: len(x) == 0)]
+            ## generate ngrams
+            # n grams from 1 to max_ngram
+            # link tokens with "_"
+            case_id = filtered.case_id.unique()[0]
+            text = pp['token_text'].tolist()
+            ngram_df = pd.DataFrame()
+            for ngram_n in range(1, max_ngram + 1):
+                for i in range(len(text)-ngram_n + 1):
+                    ngram_df = pd.concat([
+                            ngram_df,
+                            pd.DataFrame([{"ngram_n":ngram_n,
+                                          "ngram":"_".join(text[i:i+ngram_n]),
+                                          "ngram_id": case_id + "_" + str(ngram_n) + "_" + str(i) + "_" + str(i+ngram_n)}])
+                            ])
+            ## add case_id
+            ngram_df['case_id'] = case_id
+            ## existing, add article id
+            if 'article_id' in pp.columns:
+                ngram_df['article_id'] = article_id
+            return ngram_df
+            
+sentence = filtered['token_text'][1:80].to_list()
+N = 4
+["_".join(sentence[i:i+N]) for i in range(len(sentence)-N+1)]
 ### test
 if __name__  == "__main__":
     ## instantiate prep data class
