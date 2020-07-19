@@ -11,10 +11,10 @@ from doccano_helpers import *
 from glob import glob
 from random import choice, seed
 import pycountry
-import requests
 import re
 import pandas as pd
 from googletrans import Translator
+import googletrans
 from expressvpn import wrapper
 import subprocess
 from time import sleep
@@ -37,7 +37,7 @@ class document_similarity():
             self.com_files = glob(self.rulings_docs_path + "/*CL*")
             self.prep_data_logfile = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/scripts/logs/prep_input.txt'
         ### load the labeled data
-        def load_labels(self):
+        def load_labeled_articles(self):
             ## Log in to the client
             doccano_client = log_in(baseurl = self.doccano_baseurl,
                                 username = self.doccano_username,
@@ -49,7 +49,10 @@ class document_similarity():
             labeled_docs = get_labeled_docs(doccano_client, 1).rename(columns = {"label":"label_id"})
             ## combine
             comb = pd.merge(labels, labeled_docs, on = "label_id", how = "left")
-            return comb
+            ## drop and rename some cols for matching with articles
+            out = comb.drop(columns = ['id', 'user', 'annotation_approver'])
+            out.columns = out.columns.str.replace('meta.', '')
+            return out
         ### load lanugages dataset
         def load_langs_data(self):
             ## parse csv into pandas
@@ -57,7 +60,7 @@ class document_similarity():
             parsed.columns = parsed.columns.str.replace("-", "_")
             return parsed
         ### load the articles 
-        def load_articles(self):
+        def load_corpus(self):
             ## load the dataset
             dta_all = pd.read_csv(self.articles_data_path, encoding = "utf-8").drop(columns = ['label'])
             # appno var
@@ -70,6 +73,14 @@ class document_similarity():
             # Finally, we left join them by alpha2 code
             stand_lang = pd.merge(dta_all, langs_data, how = 'inner', on = "source_lang_alpha2")
             return stand_lang
+        ### load articles data
+        def load_articles_data(self):
+            ## load the labeled articles
+            arts_labeled = self.load_labeled_articles().drop_duplicates(subset = "article_id")
+            ## load all articles 
+            arts_all = self.load_corpus().drop_duplicates(subset = "article_id")
+            ## combine them
+            merged = pd.merge(arts_all, arts_labeled, how = "left", on = ['article_id', 'case_id', 'judgment_date', 'date_published', 'text'])
         ### function for filtering decision docs
         def filter_decision_doc(self, case_id, source_lang_alpha3b, judgment = True, pref_original = True, last_resort_isocode = "FRE"):
             # case id to app number
@@ -175,8 +186,8 @@ class document_similarity():
                 ## connect to a random vpn
                 self.random_vpn()
                 sleep(randint(10, 20))
-            ## concatenate the paragraphs to make the translation faster
-            input_pars = "\n".join(list(filter(None, dataset.text_paragraphs.tolist())))
+            ## concatenate the paragraphs to make the translation faster. Remove white space, paragraphs starting with a paragraph sign, and paragraphs with less than 60 characters.
+            input_pars = "\n".join(list(filter(lambda x: x != None and x.startswith("©") == False and len(x) > 60, dataset.text_paragraphs.tolist())))
             ### translation
             max_attempts = 5
             attempts = 0
@@ -207,14 +218,12 @@ class document_similarity():
                             self.random_vpn()
                             sleep(randint(40, 60))
                             try:
-                                ## google translate only allows text up to 15000, in the website it is 3900, truncate the main text to 3700       
-                                input_pars = input_pars[:3000]
-                                translated = translator.translate(input_pars, dest='en')
+                                translated = translator.translate(input_pars[:3000], dest='en')
                             except:
                                 translated = None
                                 break
             ## turn translation object to text
-            if isinstance(translated, list):
+            if isinstance(translated, googletrans.models.Translated):
                 translated_text = translated.text
             else:
                 translated_text = None
@@ -242,8 +251,8 @@ class document_similarity():
                         df_raw['translated'] = "1"
                         df_raw['doc_lang'] = "ENG"
                     else:
-                        ## concatenate the paragraphs into "text" col. Remove white space.
-                        df_raw['text'] = "\n".join(list(filter(None, df_raw.text_paragraphs)))
+                        ## concatenate the paragraphs into "text" col. Remove white space, paragraphs starting with a paragraph sign, and paragraphs with less than 60 characters
+                        df_raw['text'] = "\n".join(list(filter(lambda x: x != None and x.startswith("©") == False and len(x) > 60, df_raw.text_paragraphs)))
                         df_raw['translated'] = "0"
                     ## keep unique fils and dorp some cols
                     df_raw = df_raw.drop_duplicates(subset = ['file']).drop(columns = ['text_paragraphs'])
@@ -265,8 +274,12 @@ class document_similarity():
 ### test
 if __name__  == "__main__":
     
-    prep = document_similarity.prep_data()        
-    rulings_loaded = prep.load_rulings()    
+    prep = document_similarity.prep_data()  
+    ## load articles
+    arts_labeled = prep.load_labeled_articles()    
+    arts_all = prep.load_articles()
+    # load rulings
+    #rulings_loaded = prep.load_rulings()    
         
         
         
