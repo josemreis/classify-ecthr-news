@@ -281,14 +281,16 @@ class document_similarity():
     ## sub-class: functions for pre-processing the strings for the string distance analyses
     # Relevant processing: (i) tokenization and (ii) turning strings into vectors    
     class pre_process():
-        
+        ### some variables
+        def __init__(self):
+            self.stanza_models = [x for x in glob('/home/jmr/stanza_resources/*') if "json" not in x]
         ## tokenize
-        def tokenize(lang = None, text = None):
+        def tokenize(self, lang = None, text = None, case_id = None, article_id = None):
             ## turn lang into isocode alpha 2
             lang = pycountry.languages.lookup(lang).alpha_2
             ## check if the language model exists, if not download it
-            if not "/home/jmr/stanza_resources/" + lang in glob('/home/jmr/stanza_resources/*'):
-                stanza.download(source_lang_alpha2)
+            if not "/home/jmr/stanza_resources/" + lang in self.stanza_models:
+                stanza.download(lang)
             ## start the stanza pipeline for tokenizing with sentence segmentation as well as pos-tagging
             nlp = stanza.Pipeline(lang=lang, processors='tokenize,mwt,pos', tokenize_no_ssplit=False)
             ## tokenize
@@ -304,6 +306,10 @@ class document_similarity():
                     word_df['token_id'] = str(i + 1) + "_" + str(j + 1)
                     ## concatenate
                     df_raw = pd.concat([df_raw, word_df])
+            if isinstance(case_id, str):
+                df_raw['case_id'] = case_id
+            if isinstance(article_id, str):
+                df_raw['article_id'] = case_id
             return df_raw
 ### test
 if __name__  == "__main__":
