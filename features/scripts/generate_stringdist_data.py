@@ -81,6 +81,11 @@ class document_similarity():
             arts_all = self.load_corpus().drop_duplicates(subset = "article_id")
             ## combine them
             merged = pd.merge(arts_all, arts_labeled, how = "left", on = ['article_id', 'case_id', 'judgment_date', 'date_published', 'text'])
+            ## transform the label variable into dummy            
+            merged['ecthr_label'] = np.where(merged.label_name == 'ecthr_ruling', 1, np.where(merged.label_name == 'not_ecthr_ruling', 0, None))
+            # "is_labeled" var
+            merged['is_labeled'] = np.where(merged_test.label_name.isnull(), 0, 1)
+            return merged
         ### function for filtering decision docs
         def filter_decision_doc(self, case_id, source_lang_alpha3b, judgment = True, pref_original = True, last_resort_isocode = "FRE"):
             # case id to app number
