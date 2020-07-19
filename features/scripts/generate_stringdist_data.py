@@ -187,7 +187,8 @@ class document_similarity():
                     ## translate
                     # source: automatic detection
                     # destination: "en"
-                    translated = translator.translate(input_pars, dest='en')
+                    # google translate only allows text up to 15000, however above 9000 we get an error. Stick with it...
+                    translated = translator.translate(input_pars[:9000], dest='en')
                     sleep(randint(1, 5))
                     break
                 except BaseException as e:
@@ -200,9 +201,7 @@ class document_similarity():
                             ## initiate a new instance to get another ticket
                             translator = Translator()
                             ## translate
-                            ## google translate only allows text up to 15000, in the website it is 3900, truncate the main text to 3700       
-                            input_pars = input_pars[:3000]
-                            translated = translator.translate(input_pars, dest='en')
+                            translated = translator.translate(input_pars[:5000], dest='en')
                         except:
                             # rotate ip
                             self.random_vpn()
@@ -235,7 +234,7 @@ class document_similarity():
                 path = row['doc_path']
                 print(path)
                 if "rulings_data/json" in path:
-                    df_raw = pd.read_json(path).rename(columns = {"case_id":"appno"})
+                    df_raw = pd.read_json(path, encoding = "utf-8").rename(columns = {"case_id":"appno"})
                     df_raw['case_id'] = row['case_id']
                     ## if "to_translate", translate and concatenate it
                     if row['source_lang_alpha3_b'] == "to_translate":
@@ -263,8 +262,11 @@ class document_similarity():
             return out
         
         
-        
-        
+### test
+if __name__  == "__main__":
+    
+    prep = document_similarity.prep_data()        
+    rulings_loaded = prep.load_rulings()    
         
         
         
