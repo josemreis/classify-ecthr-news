@@ -14,6 +14,7 @@ import pycountry
 import re
 import pandas as pd
 from pandas.io.json import json_normalize
+import numpy as np
 from googletrans import Translator
 import googletrans
 from expressvpn import wrapper
@@ -39,7 +40,7 @@ class text_features():
             self.com_files = glob(self.rulings_docs_path + "/*CL*")
             self.prep_data_logfile = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/scripts/logs/prep_input.txt'
             self.stanza_models = '/home/jmr/stanza_resources/*' 
-
+            self.data_repo = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/data/' 
         ### load the labeled data
         def load_labeled_articles(self):
             ## Log in to the client
@@ -78,17 +79,33 @@ class text_features():
             stand_lang = pd.merge(dta_all, langs_data, how = 'inner', on = "source_lang_alpha2")
             return stand_lang
         ### load articles data
-        def load_articles(self):
-            ## load the labeled articles
-            arts_labeled = self.load_labeled_articles().drop_duplicates(subset = ["article_id", "case_id"])
-            ## load all articles 
-            arts_all = self.load_corpus().drop_duplicates(subset = ["article_id", "case_id"])
-            ## combine them
-            merged = pd.merge(arts_all, arts_labeled, how = "left", on = ['article_id', 'case_id', 'judgment_date', 'date_published', 'text'])
-            ## transform the label variable into dummy            
-            merged['ecthr_label'] = np.where(merged.label_name == 'ecthr_ruling', 1, np.where(merged.label_name == 'not_ecthr_ruling', 0, None))
-            # "is_labeled" var
-            merged['is_labeled'] = np.where(merged.label_name.isnull(), 0, 1)
+        def load_articles(self, export_csv = False, filename = "interm_data/articles_data_raw.csv.gz", load_latest = False):
+            if not load_latest:
+                ## load the labeled articles
+                arts_labeled = self.load_labeled_articles().drop_duplicates(subset = ["article_id", "case_id"])
+                ## load all articles 
+                arts_all = self.load_corpus().drop_duplicates(subset = ["article_id", "case_id"])
+                ## combine them
+                merged = pd.merge(arts_all, arts_labeled, how = "left", on = ['article_id', 'case_id', 'judgment_date', 'date_published', 'text'])
+                ## transform the label variable into dummy            
+                merged['ecthr_label'] = np.where(merged.label_name == 'ecthr_ruling', 1, np.where(merged.label_name == 'not_ecthr_ruling', 0, None))
+                # "is_labeled" var
+                merged['is_labeled'] = np.where(merged.label_name.isnull(), 0, 1)
+                ## generate "original_text" variable by concatenating the text vars
+                text_original = ""
+                for index, row in merged.iterrows():
+                    if isinstance(row["article_title"], str) and len(row["article_title"]) > 0:
+                        text_original = "\n".join([text_original,row["article_title"]])
+                    if isinstance(row["article_leading_paragraph"], str) and len(row["article_leading_paragraph"]) > 0:
+                        text_original = "\n".join([text_original,row["article_leading_paragraph"]])
+                    if isinstance(row["article_maintext"], str) and len(row["article_maintext"]) > 0:
+                        text_original = "\n".join([text_original,row["article_maintext"]])
+                # assign
+                merged['text_original'] = text_original 
+                if export_csv:
+                    merged.to_csv(self.data_repo + filename, compression = "gzip")
+            else:
+                merged = pd.read_csv(self.data_repo + filename, index_col=0)
             return merged
         ### function for filtering decision docs
         def filter_decision_doc(self, case_id, source_lang_alpha3b, judgment = True, pref_original = True, last_resort_isocode = "FRE"):
@@ -238,45 +255,52 @@ class text_features():
                 translated_text = None
             return translated_text
         ### Load rulings text data
-        def load_rulings(self, debug = True):
-            ## load the rulings metadata
-            rulings_metadata = self.load_rulings_metadata(debug = False)
-            ### For each ruling doc, load the respective json dataset
-            ## if not in engish or local language, translate it
-            # container
-            rulings_container = []
-            # start the loop
-            for index, row in  rulings_metadata.iterrows():
-                ## get some relevant parameters
-                ## load it to a pandas df
-                path = row['doc_path']
-                print(path)
-                if "rulings_data/json" in path:
-                    df_raw = pd.read_json(path, encoding = "utf-8").rename(columns = {"case_id":"appno"})
-                    df_raw['case_id'] = row['case_id']
-                    ## if "to_translate", translate and concatenate it
-                    if row['source_lang_alpha3_b'] == "to_translate":
-                        df_raw['text'] = self.translate_article(dataset = df_raw)
-                        df_raw['translated'] = "1"
-                        df_raw['doc_lang'] = "ENG"
-                    else:
-                        ## concatenate the paragraphs into "text" col. Remove white space, paragraphs starting with a paragraph sign, and paragraphs with less than 60 characters
-                        df_raw['text'] = "\n".join(list(filter(lambda x: x != None and x.startswith("©") == False and len(x) > 60, df_raw.text_paragraphs)))
-                        df_raw['translated'] = "0"
-                    ## keep unique fils and dorp some cols
-                    df_raw = df_raw.drop_duplicates(subset = ['file']).drop(columns = ['text_paragraphs'])
-                    df_raw = df_raw.rename(columns = {'appno':'appno',
-                                                      'doc_type':'ruling_doc_type',
-                                                      'doc_lang':'ruling_doc_lang',
-                                                      'file':'ruling_doc_file',
-                                                      'text':'ruling_text',
-                                                      'translated':'ruling_translated'})
-                    ## append to container
-                    rulings_container.append(df_raw)
-                    if debug:
-                        print(df_raw)
-            ## concatenate and return
-            out = pd.concat(rulings_container)
+        def load_rulings(self, debug = True, export_csv = False, filename = "interm_data/rulings_data_raw.csv.gz", load_latest = False):
+            if not load_latest:
+                ## load the rulings metadata
+                rulings_metadata = self.load_rulings_metadata(debug = False)
+                ### For each ruling doc, load the respective json dataset
+                ## if not in engish or local language, translate it
+                # container
+                rulings_container = []
+                # start the loop
+                for index, row in  rulings_metadata.iterrows():
+                    ## get some relevant parameters
+                    ## load it to a pandas df
+                    path = row['doc_path']
+                    print(path)
+                    if "rulings_data/json" in path:
+                        df_raw = pd.read_json(path, encoding = "utf-8").rename(columns = {"case_id":"appno"})
+                        df_raw['case_id'] = row['case_id']
+                        ## if "to_translate", translate and concatenate it
+                        if row['source_lang_alpha3_b'] == "to_translate":
+                            df_raw['text'] = self.translate_article(dataset = df_raw)
+                            df_raw['translated'] = "1"
+                            df_raw['doc_lang'] = "ENG"
+                        else:
+                            ## concatenate the paragraphs into "text" col. Remove white space, paragraphs starting with a paragraph sign, and paragraphs with less than 60 characters
+                            df_raw['text'] = "\n".join(list(filter(lambda x: x != None and x.startswith("©") == False and len(x) > 60, df_raw.text_paragraphs)))
+                            df_raw['translated'] = "0"
+                        ## keep unique fils and dorp some cols
+                        df_raw = df_raw.drop_duplicates(subset = ['file']).drop(columns = ['text_paragraphs'])
+                        df_raw = df_raw.rename(columns = {'appno':'appno',
+                                                          'doc_type':'ruling_doc_type',
+                                                          'doc_lang':'ruling_doc_lang',
+                                                          'file':'ruling_doc_file',
+                                                          'text':'ruling_text',
+                                                          'translated':'ruling_translated'})
+                        ## append to container
+                        rulings_container.append(df_raw)
+                        if debug:
+                            print(df_raw)
+                ## concatenate and return
+                out = pd.concat(rulings_container)
+                ## export if requested
+                if export_csv:
+                    out.to_csv(self.data_repo + filename, compression = "gzip")
+            else:
+                ## just load the latest
+                out = pd.read_csv(self.data_repo + filename, index_col=0)
             return out
     
     ## sub-class: functions for pre-processing the strings for the string distance analyses
@@ -344,18 +368,21 @@ class text_features():
             if 'article_id' in pp.columns:
                 ngram_df['article_id'] = article_id
             return ngram_df
-            
+
+## test          
 if __name__  == "__main__":
     ## instantiate prep data class
     prep = text_features.prep_data()  
     ## load articles
-    #articles_raw = prep.load_articles()
+    articles_raw = prep.load_articles(export_csv = True)
     # load rulings
-    #rulings_raw = prep.load_rulings()  
+    rulings_raw = prep.load_rulings(export_csv = False, load_latest = True)  
     
     ## instantiate pre_process class
     proc = text_features.pre_process()
+       
     
+
         
         
         
