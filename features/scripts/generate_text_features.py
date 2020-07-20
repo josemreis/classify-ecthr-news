@@ -92,16 +92,19 @@ class text_features():
                 # "is_labeled" var
                 merged['is_labeled'] = np.where(merged.label_name.isnull(), 0, 1)
                 ## generate "original_text" variable by concatenating the text vars
-                text_original = ""
+                text_og_list = []
                 for index, row in merged.iterrows():
-                    if isinstance(row["article_title"], str) and len(row["article_title"]) > 0:
-                        text_original = "\n".join([text_original,row["article_title"]])
-                    if isinstance(row["article_leading_paragraph"], str) and len(row["article_leading_paragraph"]) > 0:
-                        text_original = "\n".join([text_original,row["article_leading_paragraph"]])
-                    if isinstance(row["article_maintext"], str) and len(row["article_maintext"]) > 0:
-                        text_original = "\n".join([text_original,row["article_maintext"]])
-                # assign
-                merged['text_original'] = text_original 
+                    text_original = ""
+                    if isinstance(row["article_title"], float) == False and len(row["article_title"]) > 0:
+                        text_original = "\n".join([text_original, row["article_title"]])
+                    if isinstance(row["article_leading_paragraph"], float) == False and len(row["article_leading_paragraph"]) > 0:
+                        text_original = "\n".join([text_original, row["article_leading_paragraph"]])
+                    if isinstance(row["article_maintext"], float) == False and len(row["article_maintext"]) > 0:
+                        text_original = "\n".join([text_original, row["article_maintext"]])
+                    # assign
+                    text_og_list.append(text_original)
+                    print(text_original)
+                merged["text_original"] = text_og_list
                 if export_csv:
                     merged.to_csv(self.data_repo + filename, compression = "gzip")
             else:
