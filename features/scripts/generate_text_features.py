@@ -334,6 +334,7 @@ class text_features():
             self.stringdist_path = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/data/input/stringdist/'
             self.tf_path = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/data/input/tf_dtm/'
         ## tokenize
+        ## tokenize
         def tokenize(self, lang = None, text = None, case_id = None, article_id = None, use_gpu=True):
             ## turn lang into isocode alpha 2
             lang = pycountry.languages.lookup(lang).alpha_2
@@ -343,18 +344,20 @@ class text_features():
             ## start the stanza pipeline for tokenizing with sentence segmentation as well as pos-tagging
             nlp = stanza.Pipeline(lang=lang, processors='tokenize,mwt,pos', tokenize_no_ssplit=False)
             ## tokenize
-            doc = nlp(text)
+            #  minibatch at the paragraph level by spliting the text with "\n\n" as per stanza usage
+            # significant speed improvements after some experimentation...
+            mini_batch = text.replace("\n", "\n\n").strip()
+            doc = nlp(mini_batch)
             # for each sentence, get all tokens as well as their pos-tag and other morphological info
-            df_raw = []
+            dict_list = []
             for i, sentence in enumerate(doc.sentences):
-                ## for each word extract mofphological info plus add ids, turn all to df
                 for j, current_word in enumerate(sentence.words):
-                    word_df = json_normalize(current_word.to_dict()).drop(columns = "id").add_prefix("token_")
-                    word_df['token_id'] = case_id + "_" + str(i + 1) + "_" + str(j + 1)
-                    ## append
-                    df_raw.append(word_df)
-            df_raw = pd.concat(df_raw)
-            df_raw['case_id'] = case_id
+                    cur_dict = current_word.to_dict()
+                    cur_dict['token_id'] = "_".join([case_id, str(i + 1), str(j + 1)])
+                    cur_dict['case_id'] = case_id
+                    dict_list.append(cur_dict)
+            ## turn dict to df
+            df_raw = pd.DataFrame(dict_list)
             if isinstance(article_id, str):
                 df_raw['article_id'] = article_id
             return df_raw
@@ -470,12 +473,14 @@ if __name__  == "__main__":
     #rulings_raw = prep.load_rulings(export_csv = False, load_latest = True)
     # load dyads data
     rulart_dyad = prep.make_rulart_dyads(export_csv = False, load_latest = True).sample(frac = 1) # reshuffle
+    # for now, just the labeled ones
+    labeled_dyads = rulart_dyad[rulart_dyad["ecthr_label"].notnull()]
     ## instantiate pre_process class
     proc = text_features.pre_process()
     for run in range(1, 20):
         print("\nRun: " + str(run) + "\n")
         try:
-            for index, row in rulart_dyad.iterrows():
+            for index, row in labeled_dyads.iterrows():
                 ### If text feature files do not exist, go on
                 filename = proc.tf_path + "tf" + "_" + row['article_id'] + ".csv.gz"
                 if not os.path.isfile(filename):
