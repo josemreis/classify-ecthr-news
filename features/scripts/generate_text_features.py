@@ -22,6 +22,7 @@ import subprocess
 from time import sleep
 from random import randint
 import stanza
+import stopwordsiso as stopwords
 
 #### Main class
 class text_features():
@@ -328,7 +329,6 @@ class text_features():
         ### some variables
         def __init__(self):
             self.stanza_models = [x for x in glob('/home/jmr/stanza_resources/*') if "json" not in x]
-        
         ## tokenize
         def tokenize(self, lang = None, text = None, case_id = None, article_id = None, use_gpu=True):
             ## turn lang into isocode alpha 2
@@ -341,26 +341,46 @@ class text_features():
             ## tokenize
             doc = nlp(text)
             # for each sentence, get all tokens as well as their pos-tag and other morphological info
-            df_raw = pd.DataFrame()
+            df_raw = []
             for i, sentence in enumerate(doc.sentences):
                 ## for each word extract mofphological info plus add ids, turn all to df
                 for j, current_word in enumerate(sentence.words):
                     word_df = json_normalize(current_word.to_dict()).drop(columns = "id").add_prefix("token_")
-                    word_df['sentence_id'] = i + 1
-                    word_df['word_id'] = j + 1
                     word_df['token_id'] = case_id + "_" + str(i + 1) + "_" + str(j + 1)
-                    ## concatenate
-                    df_raw = pd.concat([df_raw, word_df])     
-                    df_raw['case_id'] = case_id
+                    ## append
+                    df_raw.append(word_df)
+            df_raw = pd.concat(df_raw)
+            df_raw['case_id'] = case_id
             if isinstance(article_id, str):
                 df_raw['article_id'] = article_id
             return df_raw
+        ## get lang stopwords
+        def get_lang_stopwords(self, lang):
+            ## standardize the lang
+            lang_stand = pycountry.languages.lookup(lang).alpha_2
+            ## fetch stopwords
+            if stopwords.has_lang(lang_stand):
+                stop = stopwords.stopwords(lang_stand)
+                if len(stop) > 1:
+                    ret = list(stop)
+                else:
+                    ret = None
+            else:
+                ret = None
+            return ret
         ## normalize
-        def normalize(self, tokenized_df, max_ngram = 4, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"]):
+        def normalize(self, tokenized_df, lang = lang, max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"]):
             ## filter out unwanted tokens
             filtered = tokenized_df[tokenized_df.token_upos.isin(keep_upos)]
             ## turn to lower
             filtered.token_text = filtered.token_text.apply(lambda x: x.lower())
+            ## if activated, remove stopwords
+            if not keep_stopwords:
+                # fecth stopwords for this language
+                lang_stopwords = get_lang_stopwords(lang)
+                if isinstance(lang_stopwords, list):
+                    print("\nremoving stopwords!\n")
+                    filtered = filtered[~filtered['token_text'].isin(lang_stopwords)]
             ## remove extra punctuation which was missed by the pos-tag
             filtered.token_text = filtered.token_text.apply(lambda x: re.sub('[!"»#§$%&\'()*+,.:;<=>?@[\\]^_{|}~]', '', x))
             ## keep strings with at least one
@@ -386,14 +406,14 @@ class text_features():
                 ngram_df['article_id'] = pp.article_id.unique()[0]
             return ngram_df
         ## Compute term frequency (normalized)
-        def compute_tf(wordDict, corpus):
+        def compute_tf(self, wordDict, corpus):
             tfDict = {}
             corpus_count = len(corpus)
             for word, count in wordDict.items():
                 tfDict[word] = count / float(corpus_count)
             return tfDict
         ## function for generating a dtm vctor with term frequency for two docs
-        def tf_dtm(ruling_normalized, art_normalized, tf_normalized = True):
+        def tf_dtm(self, ruling_normalized, art_normalized, tf_normalized = True):
             ## generate a corpus: unique words in both
             corpus = set(ruling_normalized.ngram.tolist()).union(set(art_normalized.ngram.tolist()))
             ## calculate the frequencies
@@ -402,7 +422,7 @@ class text_features():
                 ruling_dict[ngram] += 1
             ## compute tf
             if tf_normalized:
-                ruling_tf = compute_tf(ruling_dict, corpus)
+                ruling_tf = self.compute_tf(ruling_dict, corpus)
             else:
                 ruling_tf = ruling_dict
             ## calculate the frequencies
@@ -411,7 +431,7 @@ class text_features():
                 art_dict[ngram] += 1
             ## compute tf
             if tf_normalized:
-                art_tf = compute_tf(art_dict, corpus)
+                art_tf = self.compute_tf(art_dict, corpus)
             else:
                 art_tf = art_dict
             ## tidy text
@@ -421,6 +441,19 @@ class text_features():
             tidy_dtm['case_id'] = art_normalized.case_id.iloc[0]
             tidy_dtm['article_id'] = art_normalized.article_id.iloc[0]
             return tidy_dtm
+        ## compute cosine similarity
+        def cosine_similarity(self, tf_dtm):
+            ## pull the vectors for the ruling and article
+            ruling_vector = dtm_df[dtm_df.index.str.contains("ruling")].drop(columns = ['case_id', 'article_id'])
+            article_vector = dtm_df[dtm_df.index.str.contains("article")].drop(columns = ['case_id', 'article_id'])
+            cos_sim = 1 - cosine(ruling_vector, article_vector)
+            return cos_sim
+        ## jaccard distance
+        def jaccard_similarity(self, ruling_normalized, art_normalized, nouns_only=True):
+            intersection = set(ruling_normalized).intersection(set(art_normalized))
+            union = set(ruling_normalized).union(set(art_normalized))
+            return len(intersection)/len(union)
+
 
 ## test          
 if __name__  == "__main__":
