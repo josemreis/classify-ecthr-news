@@ -305,6 +305,22 @@ class text_features():
                 ## just load the latest
                 out = pd.read_csv(self.data_repo + filename, index_col=0)
             return out
+        ### make_rulArt_dyads
+        def make_rulart_dyads(self, export_csv = False, load_latest = True,  filename = "interm_data/rulings_article_dyad_data_raw.csv.gz"):
+            if not load_latest:
+                ## load articles
+                articles_raw = prep.load_articles(export_csv = False, load_latest = True)
+                # load rulings
+                rulings_raw = prep.load_rulings(export_csv = False, load_latest = True)  
+                ## merge them
+                out = pd.merge(articles_raw, rulings_raw, how = "inner", on = ["case_id", "appno"])
+                # export
+                if export_csv:
+                    out.to_csv(self.data_repo + filename, compression = "gzip")
+            else:
+                ## just load the latest
+                out = pd.read_csv(self.data_repo + filename, index_col=0)  
+            return out
     
     ## sub-class: functions for pre-processing the strings for the string distance analyses
     # Relevant processing: (i) tokenization and (ii) turning strings into vectors    
@@ -377,10 +393,11 @@ if __name__  == "__main__":
     ## instantiate prep data class
     prep = text_features.prep_data()  
     ## load articles
-    articles_raw = prep.load_articles(export_csv = True)
+    articles_raw = prep.load_articles(export_csv = False, load_latest = True)
     # load rulings
     rulings_raw = prep.load_rulings(export_csv = False, load_latest = True)  
-    
+    # load dyads data
+    rulart_dyad = prep.make_rulart_dyads(export_csv = True, load_latest = False,  filename = "interm_data/rulings_article_dyad_data_raw.csv.gz")
     ## instantiate pre_process class
     proc = text_features.pre_process()
        
