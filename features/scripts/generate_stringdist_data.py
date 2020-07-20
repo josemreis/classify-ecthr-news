@@ -13,6 +13,7 @@ from random import choice, seed
 import pycountry
 import re
 import pandas as pd
+from pandas.io.json import json_normalize
 from googletrans import Translator
 import googletrans
 from expressvpn import wrapper
@@ -22,7 +23,7 @@ from random import randint
 import stanza
 
 #### Main class
-class document_similarity():
+class text_features():
     ### Sub-class: prepare the input data
     class prep_data():
         """sub-class for preping the data before the string distance calculations"""
@@ -320,7 +321,7 @@ class document_similarity():
             ## turn to lower
             filtered.token_text = filtered.token_text.apply(lambda x: x.lower())
             ## remove extra punctuation which was missed by the pos-tag
-            filtered.token_text = filtered.token_text.apply(lambda x: re.sub('[!"#§$%&\'()*+,.:;<=>?@[\\]^_{|}~]', '', x))
+            filtered.token_text = filtered.token_text.apply(lambda x: re.sub('[!"»#§$%&\'()*+,.:;<=>?@[\\]^_{|}~]', '', x))
             ## keep strings with at least one
             pp = filtered[~filtered.token_text.apply(lambda x: len(x) == 0)]
             ## generate ngrams
@@ -344,20 +345,16 @@ class document_similarity():
                 ngram_df['article_id'] = article_id
             return ngram_df
             
-sentence = filtered['token_text'][1:80].to_list()
-N = 4
-["_".join(sentence[i:i+N]) for i in range(len(sentence)-N+1)]
-### test
 if __name__  == "__main__":
     ## instantiate prep data class
-    prep = document_similarity.prep_data()  
+    prep = text_features.prep_data()  
     ## load articles
     #articles_raw = prep.load_articles()
     # load rulings
     #rulings_raw = prep.load_rulings()  
     
     ## instantiate pre_process class
-    proc = document_similarity.pre_process()
+    proc = text_features.pre_process()
     
         
         
