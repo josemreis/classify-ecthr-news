@@ -23,6 +23,7 @@ from time import sleep
 from random import randint
 import stanza
 import stopwordsiso as stopwords
+from scipy.spatial.distance import cosine
 
 #### Main class
 class text_features():
@@ -329,6 +330,8 @@ class text_features():
         ### some variables
         def __init__(self):
             self.stanza_models = [x for x in glob('/home/jmr/stanza_resources/*') if "json" not in x]
+            self.stringdist_path = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/data/input/stringdist/'   
+            self.tf_path = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/data/input/tf_dtm/'
         ## tokenize
         def tokenize(self, lang = None, text = None, case_id = None, article_id = None, use_gpu=True):
             ## turn lang into isocode alpha 2
@@ -442,7 +445,7 @@ class text_features():
             tidy_dtm['article_id'] = art_normalized.article_id.iloc[0]
             return tidy_dtm
         ## compute cosine similarity
-        def cosine_similarity(self, tf_dtm):
+        def cosine_similarity(self, dtm_df):
             ## pull the vectors for the ruling and article
             ruling_vector = dtm_df[dtm_df.index.str.contains("ruling")].drop(columns = ['case_id', 'article_id'])
             article_vector = dtm_df[dtm_df.index.str.contains("article")].drop(columns = ['case_id', 'article_id'])
@@ -452,10 +455,11 @@ class text_features():
         def jaccard_similarity(self, ruling_normalized, art_normalized, nouns_only=True):
             intersection = set(ruling_normalized).intersection(set(art_normalized))
             union = set(ruling_normalized).union(set(art_normalized))
-            return len(intersection)/len(union)
+            jaccard_distance = len(intersection)/len(union)
+            return jaccard_distance
 
 
-## test          
+### Generate features         
 if __name__  == "__main__":
     ## instantiate prep data class
     prep = text_features.prep_data()  
@@ -464,9 +468,57 @@ if __name__  == "__main__":
     # load rulings
     #rulings_raw = prep.load_rulings(export_csv = False, load_latest = True)  
     # load dyads data
-    # rulart_dyad = prep.make_rulart_dyads(export_csv = False, load_latest = True)
+    rulart_dyad = prep.make_rulart_dyads(export_csv = False, load_latest = True)
     ## instantiate pre_process class
     proc = text_features.pre_process()
+    for index, row in rulart_dyad[2:6].iterrows():
+        ### If text feature files do not exist, go on
+        filename = proc.tf_path + "tf" + "_" + row['article_id'] + ".csv.gz"
+        if not os.path.isfile(filename):
+            ## depending on whether the ruling was translated, choose the translated text ("text") or original
+            # as well as relevant language
+            if row['ruling_translated'] == 1 or row['ruling_doc_lang'] == "ENG":
+                text = row['text']
+                lang = "en"
+            else:
+                text = row['text_original']
+                lang = row['source_lang_alpha2']
+            ### ** Pre-processing **
+            if isinstance(text, str) and isinstance(lang, str):
+                ## tokenize and normalize the article
+                # tokenize  
+                art_tokenized = proc.tokenize(text = text, lang = lang, case_id = row['case_id'], article_id = row['article_id'])
+                # normalize
+                art_normalized = proc.normalize(tokenized_df = art_tokenized, max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"])
+                ## tokenize and normalize the ruling
+                # tokenize  
+                ruling_tokenized = proc.tokenize(text = row['ruling_text'], lang = row['ruling_doc_lang'], case_id = row['case_id'])
+                # normalize
+                ruling_normalized = proc.normalize(tokenized_df = ruling_tokenized, max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"])
+                ### Compute the term frequencies
+                ## "un-normalized"
+                ## Compute term frequency (normalized)
+                tf_raw = proc.tf_dtm(ruling_normalized = ruling_normalized, art_normalized = art_normalized, tf_normalized = False)
+                ## tf normalized
+                tf_norm = proc.tf_dtm(ruling_normalized = ruling_normalized, art_normalized = art_normalized, tf_normalized = True)
+                ### Export both
+                # write the csvs
+                tf_raw.to_csv(filename, compression = "gzip")
+                tf_norm.to_csv(proc.tf_path + "tf-norm" + "_" + row['article_id'] + ".csv.gz", compression = "gzip")
+                ### ** compute string distances ** 
+                ## cosine similarity
+                cosine_sim_raw = proc.cosine_similarity(tf_raw)
+                cosine_sim_norm = proc.cosine_similarity(tf_norm)
+                ## jaccard distance
+                jd = proc.jaccard_similarity(ruling_normalized = ruling_normalized, art_normalized = art_normalized, nouns_only=True)
+                dist_data = pd.DataFrame([{"cosine_similarity_counts": cosine_sim_raw,
+                                           "cosine_similarity_tf": cosine_sim_norm,
+                                           "jaccard_distance_nouns": jd,
+                                           "article_id": row['article_id'],
+                                           "case_id": row['case_id']}])
+                ## export
+                dist_file = proc.stringdist_path + "stringdist" + "_" + row['article_id'] + ".csv.gz"
+                dist_data.to_csv(dist_file, compression = "gzip")
     
        
     
