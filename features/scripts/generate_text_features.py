@@ -24,6 +24,7 @@ from random import randint
 import stanza
 import stopwordsiso as stopwords
 from scipy.spatial.distance import cosine
+import os
 
 #### Main class
 class text_features():
@@ -358,7 +359,7 @@ class text_features():
                 df_raw['article_id'] = article_id
             return df_raw
         ## get lang stopwords
-        def get_lang_stopwords(self, lang):
+        def get_lang_stopwords(self, lang = None):
             ## standardize the lang
             lang_stand = pycountry.languages.lookup(lang).alpha_2
             ## fetch stopwords
@@ -372,7 +373,7 @@ class text_features():
                 ret = None
             return ret
         ## normalize
-        def normalize(self, tokenized_df, lang = lang, max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"]):
+        def normalize(self, tokenized_df = None, lang = None, max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"]):
             ## filter out unwanted tokens
             filtered = tokenized_df[tokenized_df.token_upos.isin(keep_upos)]
             ## turn to lower
@@ -380,7 +381,7 @@ class text_features():
             ## if activated, remove stopwords
             if not keep_stopwords:
                 # fecth stopwords for this language
-                lang_stopwords = get_lang_stopwords(lang)
+                lang_stopwords = self.get_lang_stopwords(lang = lang)
                 if isinstance(lang_stopwords, list):
                     print("\nremoving stopwords!\n")
                     filtered = filtered[~filtered['token_text'].isin(lang_stopwords)]
@@ -409,14 +410,14 @@ class text_features():
                 ngram_df['article_id'] = pp.article_id.unique()[0]
             return ngram_df
         ## Compute term frequency (normalized)
-        def compute_tf(self, wordDict, corpus):
+        def compute_tf(self, wordDict = None, corpus = None):
             tfDict = {}
             corpus_count = len(corpus)
             for word, count in wordDict.items():
                 tfDict[word] = count / float(corpus_count)
             return tfDict
         ## function for generating a dtm vctor with term frequency for two docs
-        def tf_dtm(self, ruling_normalized, art_normalized, tf_normalized = True):
+        def tf_dtm(self, ruling_normalized = None, art_normalized = None, tf_normalized = True):
             ## generate a corpus: unique words in both
             corpus = set(ruling_normalized.ngram.tolist()).union(set(art_normalized.ngram.tolist()))
             ## calculate the frequencies
@@ -445,18 +446,18 @@ class text_features():
             tidy_dtm['article_id'] = art_normalized.article_id.iloc[0]
             return tidy_dtm
         ## compute cosine similarity
-        def cosine_similarity(self, dtm_df):
+        def cosine_similarity(self, dtm_df = None):
             ## pull the vectors for the ruling and article
             ruling_vector = dtm_df[dtm_df.index.str.contains("ruling")].drop(columns = ['case_id', 'article_id'])
             article_vector = dtm_df[dtm_df.index.str.contains("article")].drop(columns = ['case_id', 'article_id'])
             cos_sim = 1 - cosine(ruling_vector, article_vector)
             return cos_sim
         ## jaccard distance
-        def jaccard_similarity(self, ruling_normalized, art_normalized, nouns_only=True):
+        def jaccard_similarity(self, ruling_normalized = None, art_normalized = None):
             intersection = set(ruling_normalized).intersection(set(art_normalized))
             union = set(ruling_normalized).union(set(art_normalized))
-            jaccard_distance = len(intersection)/len(union)
-            return jaccard_distance
+            jaccard_sim = len(intersection)/len(union)
+            return jaccard_sim
 
 
 ### Generate features         
@@ -464,17 +465,18 @@ if __name__  == "__main__":
     ## instantiate prep data class
     prep = text_features.prep_data()  
     ## load articles
-    #articles_raw = prep.load_articles(export_csv = False, load_latest = True)
+    # articles_raw = prep.load_articles(export_csv = False, load_latest = True)
     # load rulings
     #rulings_raw = prep.load_rulings(export_csv = False, load_latest = True)  
     # load dyads data
-    rulart_dyad = prep.make_rulart_dyads(export_csv = False, load_latest = True)
+    rulart_dyad = prep.make_rulart_dyads(export_csv = False, load_latest = True).sample(frac = 1) # reshuffle
     ## instantiate pre_process class
     proc = text_features.pre_process()
-    for index, row in rulart_dyad[2:6].iterrows():
+    for index, row in rulart_dyad.iterrows():
         ### If text feature files do not exist, go on
         filename = proc.tf_path + "tf" + "_" + row['article_id'] + ".csv.gz"
         if not os.path.isfile(filename):
+            print("\n>> generating text features for:\n - " + row['article_id'] + "\n - " + row["ruling_doc_file"] + "\n")
             ## depending on whether the ruling was translated, choose the translated text ("text") or original
             # as well as relevant language
             if row['ruling_translated'] == 1 or row['ruling_doc_lang'] == "ENG":
@@ -487,14 +489,15 @@ if __name__  == "__main__":
             if isinstance(text, str) and isinstance(lang, str):
                 ## tokenize and normalize the article
                 # tokenize  
+                print("\n>> tokenizing, normalizing and converting to dtm\n")
                 art_tokenized = proc.tokenize(text = text, lang = lang, case_id = row['case_id'], article_id = row['article_id'])
                 # normalize
-                art_normalized = proc.normalize(tokenized_df = art_tokenized, max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"])
+                art_normalized = proc.normalize(tokenized_df = art_tokenized, lang = lang, max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"])
                 ## tokenize and normalize the ruling
                 # tokenize  
                 ruling_tokenized = proc.tokenize(text = row['ruling_text'], lang = row['ruling_doc_lang'], case_id = row['case_id'])
                 # normalize
-                ruling_normalized = proc.normalize(tokenized_df = ruling_tokenized, max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"])
+                ruling_normalized = proc.normalize(tokenized_df = ruling_tokenized, lang = row['ruling_doc_lang'], max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"])
                 ### Compute the term frequencies
                 ## "un-normalized"
                 ## Compute term frequency (normalized)
@@ -506,19 +509,21 @@ if __name__  == "__main__":
                 tf_raw.to_csv(filename, compression = "gzip")
                 tf_norm.to_csv(proc.tf_path + "tf-norm" + "_" + row['article_id'] + ".csv.gz", compression = "gzip")
                 ### ** compute string distances ** 
-                ## cosine similarity
-                cosine_sim_raw = proc.cosine_similarity(tf_raw)
+                print("\n>> calculating string distances\n")
+                ## cosine similarity (normalized)
                 cosine_sim_norm = proc.cosine_similarity(tf_norm)
                 ## jaccard distance
-                jd = proc.jaccard_similarity(ruling_normalized = ruling_normalized, art_normalized = art_normalized, nouns_only=True)
-                dist_data = pd.DataFrame([{"cosine_similarity_counts": cosine_sim_raw,
-                                           "cosine_similarity_tf": cosine_sim_norm,
-                                           "jaccard_distance_nouns": jd,
+                jd = proc.jaccard_similarity(ruling_normalized = ruling_normalized.ngram.tolist(), art_normalized = art_normalized.ngram.tolist())
+                dist_data = pd.DataFrame([{"cosine_similarity_tf": cosine_sim_norm,
+                                           "jaccard_distance": jd,
                                            "article_id": row['article_id'],
-                                           "case_id": row['case_id']}])
+                                           "case_id": row['case_id'],
+                                           "ruling_doc_file": row['ruling_doc_file']}])
+                print(dist_data[["cosine_similarity_tf", "jaccard_distance", "article_id"]])
+                print("\nFor the following label" + str(row['ecthr_label']))
                 ## export
-                dist_file = proc.stringdist_path + "stringdist" + "_" + row['article_id'] + ".csv.gz"
-                dist_data.to_csv(dist_file, compression = "gzip")
+                dist_file = proc.stringdist_path + "stringdist" + "_" + row['article_id'] + ".csv"
+                dist_data.to_csv(dist_file)
     
        
     
