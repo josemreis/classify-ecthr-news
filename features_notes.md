@@ -1,11 +1,11 @@
 # Main features
 
-  1. 1-4 ngrams (stemmed - ?, past-tense... -, stop-words removed) represented by their IDF or TF-IDF (?? see below); (num)
-  2. Any match between country mentioned in the document id and countries in the article; (dummy)
-  3. date distance; (int)
-  4. document similarity; as in my working-paper "transparency in international law..."; (int)
-  6. source (dummy var); some sources are expected to be more likely to cover echr; (dummy)
-  7. Number of characters in the article; (int)
+  - 1-4 ngrams (stemmed - ?, past-tense... -, stop-words removed) represented by their IDF or TF-IDF (?? see below); (num)
+  - date distance; (int)
+  - document similarity; as in my working-paper "transparency in international law..."; (int)
+  - source (dummy var); some sources are expected to be more likely to cover echr; (dummy)
+  - Number of characters in the article; (int)
+  - Source language, "source_lang_alpha2"(chr); to capture language-related weaknesses in the machine translation
 
 ## Sources for case description
 

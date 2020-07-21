@@ -419,30 +419,43 @@ class text_features():
                 tfDict[word] = count / float(corpus_count)
             return tfDict
         ## function for generating a dtm vctor with term frequency for two docs
-        def tf_dtm(self, ruling_normalized = None, art_normalized = None, tf_normalized = True):
-            ## generate a corpus: unique words in both
-            corpus = set(ruling_normalized.ngram.tolist()).union(set(art_normalized.ngram.tolist()))
-            ## calculate the frequencies
-            ruling_dict = dict.fromkeys(corpus, 0)
-            for ngram in ruling_normalized.ngram.tolist():
-                ruling_dict[ngram] += 1
-            ## compute tf
-            if tf_normalized:
-                ruling_tf = self.compute_tf(ruling_dict, corpus)
+        def tf_dtm(self, ruling_normalized = None, art_normalized = None, tf_normalized = True, article_only = False):
+            if not article_only:
+                ## generate a corpus: unique words in both
+                corpus = set(ruling_normalized.ngram.tolist()).union(set(art_normalized.ngram.tolist()))
+                ## calculate the frequencies
+                ruling_dict = dict.fromkeys(corpus, 0)
+                for ngram in ruling_normalized.ngram.tolist():
+                    ruling_dict[ngram] += 1
+                ## compute tf
+                if tf_normalized:
+                    ruling_tf = self.compute_tf(ruling_dict, corpus)
+                else:
+                    ruling_tf = ruling_dict
+                ## calculate the frequencies
+                art_dict = dict.fromkeys(corpus, 0)
+                for ngram in art_normalized.ngram.tolist():
+                    art_dict[ngram] += 1
+                ## compute tf
+                if tf_normalized:
+                    art_tf = self.compute_tf(art_dict, corpus)
+                else:
+                    art_tf = art_dict
+                ## tidy text
+                # replace index by doc id plus doc type
+                tidy_dtm = pd.DataFrame([ruling_tf, art_tf], index = [doc_type + "_" + art_normalized.case_id.iloc[0] for doc_type in ["ruling", "article"]])
             else:
-                ruling_tf = ruling_dict
-            ## calculate the frequencies
-            art_dict = dict.fromkeys(corpus, 0)
-            for ngram in art_normalized.ngram.tolist():
-                art_dict[ngram] += 1
-            ## compute tf
-            if tf_normalized:
-                art_tf = self.compute_tf(art_dict, corpus)
-            else:
-                art_tf = art_dict
-            ## tidy text
-            # replace index by doc id plus doc type
-            tidy_dtm = pd.DataFrame([ruling_tf, art_tf], index = [doc_type + "_" + art_normalized.case_id.iloc[0] for doc_type in ["ruling", "article"]])
+                corpus = set(art_normalized.ngram.tolist())
+                art_dict = dict.fromkeys(corpus, 0)
+                for ngram in art_normalized.ngram.tolist():
+                    art_dict[ngram] += 1
+                ## compute tf
+                if tf_normalized:
+                    art_tf = self.compute_tf(art_dict, corpus)
+                else:
+                    art_tf = art_dict
+                ## turn to pandas
+                tidy_dtm = pd.DataFrame([art_tf])
             # add case_id
             tidy_dtm['case_id'] = art_normalized.case_id.iloc[0]
             tidy_dtm['article_id'] = art_normalized.article_id.iloc[0]
@@ -471,14 +484,12 @@ if __name__  == "__main__":
     #rulings_raw = prep.load_rulings(export_csv = False, load_latest = True)
     # load dyads data
     rulart_dyad = prep.make_rulart_dyads(export_csv = False, load_latest = True).sample(frac = 1) # reshuffle
-    # for now, just the labeled ones
-    labeled_dyads = rulart_dyad[rulart_dyad["ecthr_label"].notnull()]
     ## instantiate pre_process class
     proc = text_features.pre_process()
     for run in range(1, 20):
         print("\nRun: " + str(run) + "\n")
         try:
-            for index, row in labeled_dyads.iterrows():
+            for index, row in rulart_dyad.iterrows():
                 ### If text feature files do not exist, go on
                 filename = proc.tf_path + "tf" + "_" + row['article_id'] + ".csv.gz"
                 if not os.path.isfile(filename):
@@ -539,7 +550,7 @@ if __name__  == "__main__":
                     art_tokenized = proc.tokenize(text = row['text'], lang = "en", case_id = row['case_id'], article_id = row['article_id'])
                     # normalize
                     art_normalized = proc.normalize(tokenized_df = art_tokenized, lang = "en", max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"])
-                    tf_raw = proc.tf_dtm(ruling_normalized = ruling_normalized, art_normalized = art_normalized, tf_normalized = False)
+                    tf_raw = proc.tf_dtm(art_normalized = art_normalized, tf_normalized = False, article_only = True)
                     tf_raw.to_csv(filename2, compression = "gzip")
         except:
             pass
