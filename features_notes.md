@@ -1,6 +1,6 @@
 # Main features
 
-  1. 1-5 ngrams (stemmed - ?, past-tense... -, stop-words removed) represented by their IDF or TF-IDF (?? see below); (num)
+  1. 1-4 ngrams (stemmed - ?, past-tense... -, stop-words removed) represented by their IDF or TF-IDF (?? see below); (num)
   2. Any match between country mentioned in the document id and countries in the article; (dummy)
   3. date distance; (int)
   4. document similarity; as in my working-paper "transparency in international law..."; (int)

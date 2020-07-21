@@ -334,7 +334,6 @@ class text_features():
             self.stringdist_path = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/data/input/stringdist/'
             self.tf_path = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/data/input/tf_dtm/'
         ## tokenize
-        ## tokenize
         def tokenize(self, lang = None, text = None, case_id = None, article_id = None, use_gpu=True):
             ## turn lang into isocode alpha 2
             lang = pycountry.languages.lookup(lang).alpha_2
@@ -462,7 +461,6 @@ class text_features():
             jaccard_sim = len(intersection)/len(union)
             return jaccard_sim
 
-
 ### Generate features
 if __name__  == "__main__":
     ## instantiate prep data class
@@ -532,5 +530,16 @@ if __name__  == "__main__":
                         ## export
                         dist_file = proc.stringdist_path + "stringdist" + "_" + row['article_id'] + ".csv"
                         dist_data.to_csv(dist_file)
+                ## for actual text features, we will use the translated version of the articles
+                # generate tf (not-normalized) dtms for the artice translations
+                filename2 = proc.tf_path + "tf-trans" + "_" + row['article_id'] + ".csv.gz"
+                if not os.path.isfile(filename2):
+                    # tokenize
+                    print("\n>> TRANSLATED ARTs: tokenizing, normalizing and converting to dtm\n")
+                    art_tokenized = proc.tokenize(text = row['text'], lang = "en", case_id = row['case_id'], article_id = row['article_id'])
+                    # normalize
+                    art_normalized = proc.normalize(tokenized_df = art_tokenized, lang = "en", max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"])
+                    tf_raw = proc.tf_dtm(ruling_normalized = ruling_normalized, art_normalized = art_normalized, tf_normalized = False)
+                    tf_raw.to_csv(filename2, compression = "gzip")
         except:
             pass
