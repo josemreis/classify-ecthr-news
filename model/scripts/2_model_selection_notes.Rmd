@@ -1,0 +1,72 @@
+---
+title: "ECtHR news classifier"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::html_clean:
+    highlight: kate
+---
+
+```{r setup, echo=FALSE, cache=FALSE}
+library(knitr)
+library(rmdformats)
+
+
+
+## Global options
+options(max.print="75")
+opts_chunk$set(echo=FALSE,
+	             cache=TRUE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+
+```
+
+
+# Intro
+
+Training a classifier for identifying whether a (machine-translated) news articles is about a specific ecthr in our dataset, that is, for each ecthr ruling/news artice, identify whether the latter is about the former.
+
+
+Load the packages...
+
+
+```{r}
+packs <- c("knitr", "rmdformats", "tidymodels", "textrecipes", "tidyverse")
+for (pack in packs){
+  
+  if (!pack %in% installed.packages()[,1]) {
+    
+    install.packages(pack)
+    library(pack, character.only = TRUE)
+    
+  } else {
+    
+    require(pack, character.only = TRUE)
+    
+  }
+  
+}
+```
+
+
+## Relevant features
+
+```{r}
+## load the latest model dataset
+model_data <- read_csv("../data/model_data.csv.gz")
+```
+
+  - **1-4 ngrams** represented as TF or TF-IDF vectors; (num)
+
+    1. We took each article and translated it to english using google translate [(unoffical) api](https://pypi.org/project/googletrans/).
+    2. Next, we tokenized it 
+
+  - date distance; (int)
+  - document similarity; as in my working-paper "transparency in international law..."; (int)
+  - source (dummy var); some sources are expected to be more likely to cover echr; (dummy)
+  - Number of characters in the article; (int)
+  - Source language, "source_lang_alpha2"(chr); to capture language-related weaknesses in the machine translation

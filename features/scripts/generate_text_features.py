@@ -541,16 +541,5 @@ if __name__  == "__main__":
                         ## export
                         dist_file = proc.stringdist_path + "stringdist" + "_" + row['article_id'] + ".csv"
                         dist_data.to_csv(dist_file)
-                ## for actual text features, we will use the translated version of the articles
-                # generate tf (not-normalized) dtms for the artice translations
-                filename2 = proc.tf_path + "tf-trans" + "_" + row['article_id'] + ".csv.gz"
-                if not os.path.isfile(filename2):
-                    # tokenize
-                    print("\n>> TRANSLATED ARTs: tokenizing, normalizing and converting to dtm\n")
-                    art_tokenized = proc.tokenize(text = row['text'], lang = "en", case_id = row['case_id'], article_id = row['article_id'])
-                    # normalize
-                    art_normalized = proc.normalize(tokenized_df = art_tokenized, lang = "en", max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"])
-                    tf_raw = proc.tf_dtm(art_normalized = art_normalized, tf_normalized = False, article_only = True)
-                    tf_raw.to_csv(filename2, compression = "gzip")
         except:
             pass
