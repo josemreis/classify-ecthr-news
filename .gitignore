@@ -1,3 +1,6 @@
 .Rhistory
 **/PYCACHE
 **/__pycache__
+**/*html
+**/*pdf
+**/data
