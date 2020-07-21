@@ -9,27 +9,6 @@ articles_data_path <- paste(parent_dir, "features", "data", "interm_data", "arti
 tf_path <- paste(parent_dir, "features", "data", "input", "tf_dtm", sep = "/")
 stringdist_path <- paste(parent_dir, "features", "data", "input", "stringdist", sep = "/")
 
-#### ngram data --------------------------------------------------------------------------- 
-### load all the translated dtms
-## Keep case_id and article_id as keys
-dtm_list <- list.files(tf_path, full.names = TRUE) %>%
-  subset(., str_detect(., "tf-trans"))
-## load each and turn to long-format
-tidy_dtm <- map_df(dtm_list, function(filename) {
-      ## load
-      df <- read_csv(filename) %>%
-        select(-1) 
-      ## turn to long format
-      long_df <- df %>%
-        select(-c(case_id, article_id)) %>%
-        pivot_longer(cols = everything(),
-                     names_to = "ngram", 
-                     values_to = "term_frequency") %>%
-        mutate(case_id = df$case_id[1],
-               article_id = df$article_id[1])
-      return(long_df)
-})
-
 #### String distance ---------------------------------------------------------------------
 ### load and concatenate the string distance data
 sd_list <- list.files(stringdist_path, full.names = TRUE) 
@@ -43,7 +22,7 @@ arts_all <- read_csv(articles_data_path) %>%
   mutate(article_nchar = nchar(text), ## fill in missing date published
          date_published = replace(date_published, which(is.na(date_published)), ymd(str_extract(article_id, "(?<=\\_)[0-9]{4}\\-[0-9]{1,2}\\-[0-9]{1,2}(?=\\_)"))),
          date_distance = as.integer(judgment_date - date_published)) %>%
-  select(ecthr_label, article_id, case_id, article_nchar, source_lang_alpha2, date_distance, date_published, judgment_date) # filter the relevant vars
+  select(ecthr_label, article_id, case_id, text, article_nchar, source_lang_alpha2, date_distance, date_published, judgment_date) # filter the relevant vars
 
 #### Make the final dataset ----------------------------------------------------------------------
 ### combine
