@@ -1,0 +1,111 @@
+---
+title: "ECtHR News Classifier"
+subtitle: "model selection notes"
+author: "J. M. Reis"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    keep_md: no
+    number_sections: yes
+    theme: readable
+    highlight: kate
+    fig.height: 8
+    fig.width: 10
+    toc: yes
+    toc_depth: 4
+    css: "css_stylesheet.css"
+link-citations: yes
+---
+
+```{r setup, echo=FALSE, cache=FALSE}
+require(knitr)
+## Global options
+options(max.print="75")
+opts_chunk$set(cache=TRUE,
+               prompt=FALSE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+```
+
+
+# Intro
+
+Training a classifier for identifying whether a (machine-translated) news articles is about a specific ecthr in our dataset, that is, for each ecthr ruling/news artice, identify whether the latter is about the former.
+
+
+Load the packages...
+
+
+```{r}
+packs <- c("knitr", "rmdformats", "tidymodels", "textrecipes", "tidyverse")
+for (pack in packs){
+  
+  if (!pack %in% installed.packages()[,1]) {
+    
+    install.packages(pack)
+    library(pack, character.only = TRUE)
+    
+  } else {
+    
+    library(pack, character.only = TRUE)
+    
+  }
+  
+}
+```
+
+
+# Relevant features
+
+Load the model dataset...
+
+```{r}
+## load the latest model dataset
+# keep features plus c
+model_data <- read_csv("../../data/model_data.csv.gz") %>%
+  select(ecthr_label, article_id, case_id, text, article_nchar, date_distance, cosine_similarity_tf, jaccard_distance, source_lang_alpha2)
+glimpse(model_data)
+```
+
+## Ngrams represented as TF or TF-IDF vectors
+
+These features will be generated below...
+
+  1. We took each article and translated it to english using google translate [(unoffical) api](https://pypi.org/project/googletrans/).
+  2. Next, we tokenize the text into ngrams from 1-5.
+  3. As for pre-processing, will keep it simple. Only remove stop-words and punctuation. Practices such as stemming or lemmatization might be problematic in our context since, for example, verb conjugations are expected to be relatively relavant for identifying whether, say, the ruling mentioned is the actual one or parallel one close by.
+    
+## Ruling-article document similarity (original language or english translations)
+
+The main idea is that the two documents, ruling and article, being close in their language should be indicative of whether the article covers it. String comparisons where done by comparing both as *document term matrices* where each is represented as a term-frequency normalized by document lenght (unique words) vector. 
+
+TF-IDF seemed problematic in this instance given that the most relevant words were used as key-words, and thus would be probably excessively deflated. 
+
+  1. We downloaded the rulings as well as ruling communication notices [e.g.](https://hudoc.echr.coe.int/fre?i=001-57619) in all language avaiable for each case.
+  2. The choice of relevant document was done according to the following steps:
+  
+      2.1 If ruling is available in the original language $\to$ string comparison with article in original language; when missing.
+
+      2.2. If ruling is available in english $\to$ string comparison with machine translated version of the article.
+      
+      2.3. If ruling is available in french (the other official language) machine translate it to english $\to$ string comparison with machine translated version of the article.
+      
+      2.4. If there is any ruling in any language available, take it and machine translate it $\to$ string comparison with machine translated version of the article.
+      
+      2.5. Repeat the steps above for communication notices. We found ruling docs for all cases in our dataset.
+      
+  3. For each dyad, we tokenized them using [a language specific tokenizers](https://stanfordnlp.github.io/stanza/) and extract morphological information for each word (*idem*). We first filtered the docs by pos-tags^[Namely, the following universal pos-tags were kept: "VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"; check https://universaldependencies.org/u/pos/]. Removed stop-words using a [language specific corpus](https://github.com/stopwords-iso/stopwords-iso). Tokenized them into 1-5 ngrams and computed their corpus length normalized term frequencies. 
+  4. As for comparison, I first computed their [cosine similarity](https://www.sciencedirect.com/topics/computer-science/cosine-similarity) and then the [jaccard distance](https://en.wikipedia.org/wiki/Jaccard_index) between the tokens in each vector.
+
+## Date distance
+
+Took the difference in the number of days between the judgment date and the publication date for the article. Articles covering the ruling are expected to be more likely in the days leading to or following the ruling.
+
+
+
+  - date distance; (int)
+  - source (dummy var); some sources are expected to be more likely to cover echr; (dummy)
+  - Number of characters in the article; (int)
+  - Source language, "source_lang_alpha2"(chr); to capture language-related weaknesses in the machine translation

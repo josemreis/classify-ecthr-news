@@ -1,0 +1,32 @@
+    /* CSS Stylesheet*/
+
+    body {
+    font-size: 18px;
+    color: black
+    }
+
+h1 {
+  font-size: 36px;
+}
+h1.title {
+  font-size: 40px;
+}
+h2 {
+  font-size: 32px;
+}
+h3 {
+  font-size: 28px;
+}
+h4 {
+  font-size: 20px;
+}
+h5 {
+  font-size: 18px;
+}
+h6 {
+  font-size: 14px;
+}
+.table th:not([align]) {
+  text-align: left;
+}
+
