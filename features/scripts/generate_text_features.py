@@ -354,10 +354,10 @@ class text_features():
                 for j, current_word in enumerate(sentence.words):
                     cur_dict = current_word.to_dict()
                     cur_dict['token_id'] = "_".join([case_id, str(i + 1), str(j + 1)])
-                    cur_dict['case_id'] = case_id
                     dict_list.append(cur_dict)
             ## turn dict to df
-            df_raw = pd.DataFrame(dict_list)
+            df_raw = pd.DataFrame(dict_list).drop(columns = "id").add_prefix("token_")
+            df_raw["case_id"] = case_id
             if isinstance(article_id, str):
                 df_raw['article_id'] = article_id
             return df_raw
