@@ -23,3 +23,5 @@ tidyverse
 readr
 stringr
 forcats
+themis
+ranger

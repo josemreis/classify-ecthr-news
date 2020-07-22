@@ -34,12 +34,10 @@ opts_knit$set(width=75)
 
 Training a classifier for identifying whether a (machine-translated) news articles is about a specific ecthr in our dataset, that is, for each ecthr ruling/news artice, identify whether the latter is about the former.
 
-
-Load the packages...
-
+Load the packages.
 
 ```{r}
-packs <- c("knitr", "rmdformats", "tidymodels", "textrecipes", "tidyverse")
+packs <- c("knitr", "rmdformats", "tidymodels", "textrecipes", "tidyverse", "themis", "ranger")
 for (pack in packs){
   
   if (!pack %in% installed.packages()[,1]) {
@@ -65,16 +63,19 @@ Load the model dataset...
 ## load the latest model dataset
 # keep features plus c
 model_data <- read_csv("../../data/model_data.csv.gz") %>%
-  select(ecthr_label, article_id, case_id, text, article_nchar, date_distance, cosine_similarity_tf, jaccard_distance, source_lang_alpha2)
+  mutate(model_id = paste(case_id, article_id, sep = "_"),
+         ecthr_label = as_factor(ecthr_label)) %>%
+  select(ecthr_label, text, article_nchar, date_distance, cosine_similarity_tf, jaccard_distance, lang_og = source_lang_alpha2, model_id)
 glimpse(model_data)
 ```
+
 
 ## Ngrams represented as TF or TF-IDF vectors
 
 These features will be generated below...
 
   1. We took each article and translated it to english using google translate [(unoffical) api](https://pypi.org/project/googletrans/).
-  2. Next, we tokenize the text into ngrams from 1-5.
+  2. Next, we tokenize the text into ngrams from 1-4.
   3. As for pre-processing, will keep it simple. Only remove stop-words and punctuation. Practices such as stemming or lemmatization might be problematic in our context since, for example, verb conjugations are expected to be relatively relavant for identifying whether, say, the ruling mentioned is the actual one or parallel one close by.
     
 ## Ruling-article document similarity (original language or english translations)
@@ -101,11 +102,208 @@ TF-IDF seemed problematic in this instance given that the most relevant words we
 
 ## Date distance
 
-Took the difference in the number of days between the judgment date and the publication date for the article. Articles covering the ruling are expected to be more likely in the days leading to or following the ruling.
+Took the difference in the number of days between the judgment date and the publication date for the article. Articles covering the ruling are expected to be more likely in the days leading to or following the ruling. Though on its own, its seems unlikely. Interacted, possibly.
+
+```{r}
+model_data %>%
+  group_by(ecthr_label) %>%
+  summarise(mean_dd = mean(date_distance)) %>%
+  ungroup()
+```
+
+## Number of characters in article
+
+Standard feature. Length of an article might indicate topic given current agenda cycle, though it may go in any direction.
+
+## Source language
+
+Language of the text before translation, ``source_lang_alpha2`` to capture language-related weaknesses in the machine translation and its consequences in the coding.
+
+# Modeling
+
+Split the data, 70% for training and the remaining for testing, stratified by article language. 
+
+```{r}
+set.seed(1234) 
+the_split <- initial_split(model_data, strata = "lang_og", p = 0.70)
+train_data <- training(the_split)
+test_data <- testing(the_split)
+
+train_data %>%
+  group_by(ecthr_label) %>%
+  summarise(n = n())
+
+test_data %>%
+  group_by(ecthr_label) %>%
+  summarise(n = n())
+```
+
+
+### Class imbalance
+
+Highly skewed classes tend to lead to models overperforming in predicting the majority class and underperforming in the minority class. Two ways around it:
+  - Correction via oversampling of minority class, undersampling of the majority class, and via creating synthetic data for the minority class;
+  - Cost-sensitive learning, i.e. assymetric weighting of miss-classification
+The latter comes at the cost of loosing information from the training set, e.g. loosing words, thus comes at the cost of increasing the risk of our model overfitting the data^[[see](https://www.researchgate.net/publication/220705031_Cost-Sensitive_Learning_vs_Sampling_Which_is_Best_for_Handling_Unbalanced_Classes_with_Unequal_Error_Costs
+)]. Will go with the second approach in the main workflow, though might also experiment with the former.
+
+
+## Pre-processing
+
+We start with the pre-processing. For this I will resort to ``recipes`` from tidymodels. This allows me to generate a pre-processing workflow which can be used in both training and testing datasets. For all the text-related pre-processing I will use ``textrecipes``, [details here](https://github.com/tidymodels/textrecipes).
+
+Starting with the text. Will create three recipes. 
+
+  1. tf_main:
+  
+  - tf vectors (1-4 ngrams)
+  - no stopwords
+  - tf > 20
+  - main sampling
+  - number of character natural logged
+  - lang to dummies
+  - random sample
+
+```{r}
+tf_main <- recipe(ecthr_label ~ ., data = train_data) %>%
+  step_naomit(everything()) %>%
+  step_filter(text != "" & !is.na(text)) %>%
+  step_tokenize(text) %>%
+  step_stopwords(text, keep = FALSE) %>%
+  step_tokenfilter(text, min_times = 20) %>%
+  step_untokenize(text) %>%
+  step_tokenize(text, token = "ngrams", options = list(n = 4, n_min = 1)) %>%
+  step_tf(text) %>%
+  step_log(article_nchar) %>%
+  step_dummy(lang_og) %>%
+  update_role(model_id, new_role = "id variable") %>%
+  prep(training = train_data)
+
+## the recipe
+tf_main
+str(juice(tf_main), list.len = 20)
+```
+
+    
+  2. tfidf_main:
+  
+  - tfdf vectors (1-4 ngrams)
+  - no stopwords
+  - tf > 20
+  - main sampling
+  - number of character natural logged
+  - random sample
+
+```{r}
+tfidf_main <- recipe(ecthr_label ~ ., data = train_data) %>%
+  step_naomit(everything()) %>%
+  step_filter(text != "" & !is.na(text)) %>%
+  step_tokenize(text)  %>%
+  step_stopwords(text, keep = FALSE) %>%
+  step_tokenfilter(text, min_times = 20) %>%
+  step_untokenize(text) %>%
+  step_tokenize(text, token = "ngrams", options = list(n = 4, n_min = 1)) %>%
+  step_tfidf(text) %>%
+  step_log(article_nchar) %>%
+  step_dummy(lang_og) %>%
+  update_role(model_id, new_role = "id variable") %>%
+  prep(training = train_data)
+
+## the recipe
+tfidf_main
+```
+
+  
+  3. tf_smote:
+  
+  - tfdf vectors (1-5 ngrams)
+  - no stopwords
+  - tf > 20
+  - main sampling
+  - number of character natural logged
+  - "Synthetic Minority Over-sampling Technique" ([see](https://arxiv.org/abs/1106.1813))
+  
+```{r eval=FALSE, include=TRUE}
+## BUG
+tf_smote <- recipe(ecthr_label ~ ., data = train_data) %>%
+  step_naomit(everything()) %>%
+  step_filter(text != "" & !is.na(text)) %>%
+  step_tokenize(text) %>%
+  step_stopwords(text, keep = FALSE) %>%
+  step_tokenfilter(text, min_times = 20) %>%
+  step_untokenize(text) %>%
+  step_tokenize(text, token = "ngrams", options = list(n = 4, n_min = 1)) %>%
+  step_tf(text) %>%
+  step_log(article_nchar) %>%
+  step_dummy(lang_og) %>%
+  update_role(model_id, new_role = "id variable") %>%
+  step_smote(ecthr_label, seed = 1234) %>%
+  prep(training = train_data)
+
+## the recipe
+tf_smote
+table(juice(tf_smote$ecthr_label))
+```
+    
+  4. tf_main_stop:
+  
+  - tfdf vectors (1-5 ngrams)
+  - keep stopwords
+  - stemmed
+  - main sampling
+  - number of character natural logged
+  - random sample
+
+```{r}
+tf_main_stop <- recipe(ecthr_label ~ ., data = train_data) %>%
+  step_naomit(everything()) %>%
+  step_filter(text != "" & !is.na(text)) %>%
+  step_tokenize(text) %>%
+  step_stopwords(text, keep = TRUE) %>%
+  step_tokenfilter(text, min_times = 20) %>%
+  step_untokenize(text) %>%
+  step_tokenize(text, token = "ngrams", options = list(n = 4, n_min = 1)) %>%
+  step_tf(text) %>%
+  step_log(article_nchar) %>%
+  step_dummy(lang_og) %>%
+  update_role(model_id, new_role = "id variable") %>%
+  prep(training = train_data)
+
+## the recipe
+tf_main_stop
+str(juice(tf_main_stop), list.len = 20)
+```
+
+  5. tf_main_langtokens:
+  
+  - tfdf vectors (1-5 ngrams)
+  - no stopwords
+  - language specific tokens, i.e., we concatenate the language of the original text to the text to capture translation idionsyncracies
+  - main sampling
+  - number of character natural logged
+  - random sample
+
+
+```{r eval=FALSE, include=TRUE}
+## bug
+tf_main_langtokens <- recipe(ecthr_label ~ ., data = train_data) %>%
+  step_naomit(everything()) %>%
+  step_filter(text != "" & !is.na(text)) %>%
+  step_tokenize(text) %>%
+  step_stopwords(text, keep = TRUE) %>%
+  step_tokenfilter(text, min_times = 10) %>%
+  step_untokenize(text) %>%
+  step_mutate(text = paste(lang_og, text)) %>%
+  step_rm(lang_og) %>%
+  step_tokenize(text, token = "ngrams", options = list(n = 4, n_min = 1)) %>%
+  step_tf(text) %>%
+  update_role(model_id, new_role = "id variable") %>%
+  prep(training = train_data)
+
+## the recipe
+tf_main_langtokens
+str(juice(tf_main_langtokens), list.len = 20)
+```
 
 
 
-  - date distance; (int)
-  - source (dummy var); some sources are expected to be more likely to cover echr; (dummy)
-  - Number of characters in the article; (int)
-  - Source language, "source_lang_alpha2"(chr); to capture language-related weaknesses in the machine translation
