@@ -178,14 +178,24 @@ test_data %>%
   summarise(n = n())
 ```
 
+10-fold samples (stratified by the outcome variable) from the training data for cross-validation during tuning of the training models.
+
+```{r}
+# 10-fold cross-validation
+set.seed(1234)
+cv_samples <- vfold_cv(train_data, v = 10, repeats = 1, strata = "ecthr_label")
+cv_samples
+```
+
+
 ### Class imbalance
+
 
 Highly skewed classes tend to lead to models overperforming in predicting the majority class and underperforming in the minority class. Two ways around it:
   - Correction via oversampling of minority class, undersampling of the majority class, and via creating synthetic data for the minority class;
   - Cost-sensitive learning, i.e. assymetric weighting of miss-classification
 The latter comes at the cost of loosing information from the training set, e.g. loosing words, thus comes at the cost of increasing the risk of our model overfitting the data^[[see](https://www.researchgate.net/publication/220705031_Cost-Sensitive_Learning_vs_Sampling_Which_is_Best_for_Handling_Unbalanced_Classes_with_Unequal_Error_Costs
 )]. Will go with the second approach in the main workflow, though might also experiment with the former.
-
 
 ## Pre-processing
 
@@ -200,7 +210,7 @@ Starting with the text. Will create three recipes.
   - tf vectors (1-3 ngrams)
   - no stopwords
   - stemmed
-  - tf > 2
+  - tf > 2, keep top 2000 words
   - main sampling
   - number of character natural logged
   - lang to dummies
@@ -216,7 +226,7 @@ tf_main <- recipe(ecthr_label ~ .,
   step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1)) %>%
   step_stem(text) %>%
   step_stopwords(text, keep = FALSE, stopword_source = "stopwords-iso") %>%
-  step_tokenfilter(text, min_times = 2)  %>%
+  step_tokenfilter(text, min_times = 2, max_tokens = 2000)  %>%
   step_tf(text)
 ## the recipe
 tf_main
@@ -228,7 +238,7 @@ tf_main
   - tf-idf vectors (1-3 ngrams)
   - no stopwords
   - stemmed
-  - tf > 2
+  - tf > 2, keep top 2000 words
   - main sampling
   - number of character natural logged
   - lang to dummies
@@ -244,7 +254,7 @@ tfidf_main <- recipe(ecthr_label ~ .,
   step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1)) %>%
   step_stem(text) %>%
   step_stopwords(text, keep = FALSE, stopword_source = "stopwords-iso") %>%
-  step_tokenfilter(text, min_times = 2)  %>%
+  step_tokenfilter(text, min_times = 2, max_tokens = 2000)   %>%
   step_tfidf(text)
 ## the recipe
 tfidf_main
@@ -253,36 +263,38 @@ tfidf_main
   
   3. tf_smote:
   
-  - tfdf vectors (1-5 ngrams)
+  - tf-idf vectors (1-3 ngrams)
   - no stopwords
-  - tf > 20
+  - stemmed
+  - tf > 2, keep top 2000 words
   - main sampling
   - number of character natural logged
-  - "Synthetic Minority Over-sampling Technique" ([see](https://arxiv.org/abs/1106.1813))
+  - lang to dummies
+  - For dealing with imbalance: "Synthetic Minority Over-sampling Technique" ([see](https://arxiv.org/abs/1106.1813)); generate synthetic observations based on nearest neighbors
   
-```{r eval=FALSE, include=FALSE}
-## BUG
-tf_smote <- recipe(ecthr_label ~ .,
+  
+```{r}
+tfidf_smote <- recipe(ecthr_label ~ .,
                    data = train_data) %>%
-  update_role(model_id, new_role = "id variable") %>%
-  step_smote(ecthr_label, seed = 1234)%>%
-  step_dummy(lang_og) %>%
+  step_dummy(all_nominal(), -c(text, ecthr_label, model_id)) %>%
   step_log(article_nchar) %>%
   step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1)) %>%
   step_stem(text) %>%
   step_stopwords(text, keep = FALSE, stopword_source = "stopwords-iso") %>%
-  step_tokenfilter(text, min_times = 10)  %>%
-  step_tf(text)
+  step_tokenfilter(text, min_times = 2, max_tokens = 2000)  %>%
+  step_tfidf(text) %>%
+  step_rm(model_id) %>%
+  step_smote(ecthr_label, seed = 321) 
+  
 
 ## the recipe
-tf_smote
+tfidf_smote
 ```
     
 
 ## Bulding the models
 
 The choice of models will be based on their (i) explainability (less black-box) and (ii) availability of implementation of cost-weights to compensate the class imbalance
-
 
 ### Penalized logistic regression (LASSO)
 
@@ -306,17 +318,13 @@ lasso_spec <- logistic_reg(penalty = tune(), mixture = 1) %>%
 ```
 
 
-#### Hyperparameter grid and bootstrap samples
+#### Hyperparameter grid
 
 ```{r}
 # tuning grid, range of 100 penalty values
 param_grid <- grid_regular(penalty(),
                            levels = 100)
 
-# bootstraping for the parameter tunning. 10 bootstraps
-set.seed(1234)
-ecthr_boot <- bootstraps(train_data, times = 10, strata = "ecthr_label")
-ecthr_boot
 ```
 
 
@@ -345,6 +353,16 @@ lasso_wf_tfidf <- workflow() %>%
   add_model(lasso_spec)
 
 lasso_wf_tfidf
+
+## Prep the workflow: smote sampling
+lasso_wf_smote <- workflow() %>%
+  add_recipe(
+    tfidf_smote %>% 
+      step_normalize(all_predictors(), -article_nchar)
+    ) %>%
+  add_model(lasso_spec)
+
+lasso_wf_smote
 ```
 
 #### Training and tunning the model
@@ -358,10 +376,10 @@ doParallel::registerDoParallel()
 set.seed(1234)
 lasso_grid_tf <- tune_grid(
   lasso_wf_tf,
-  resamples = ecthr_boot,
+  resamples = cv_samples,
   grid = param_grid,
   control = control_grid(verbose = FALSE, save_pred = TRUE),
-  metrics = metric_set(accuracy, roc_auc, bal_accuracy, f_meas)
+  metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv)
 )
 
 ### identify the best lambda via grid search
@@ -371,10 +389,23 @@ doParallel::registerDoParallel()
 set.seed(1234)
 lasso_grid_tfidf <- tune_grid(
   lasso_wf_tfidf,
-  resamples = ecthr_boot,
+  resamples = cv_samples,
   grid = param_grid,
   control = control_grid(verbose = FALSE, save_pred = TRUE),
-  metrics = metric_set(accuracy, roc_auc, bal_accuracy, f_meas)
+  metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv)
+)
+
+### identify the best lambda via grid search
+## TFIDF SMOTE
+# parallelize
+doParallel::registerDoParallel()
+set.seed(1234)
+lasso_grid_smote <- tune_grid(
+  lasso_wf_smote,
+  resamples = cv_samples,
+  grid = param_grid,
+  control = control_grid(verbose = FALSE, save_pred = TRUE),
+  metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv)
 )
 
 ```
@@ -384,20 +415,38 @@ lasso_grid_tfidf <- tune_grid(
   theme_minimal()
   autoplot(lasso_grid_tfidf) +
     theme_minimal()
+  autoplot(lasso_grid_smote) +
+    theme_minimal()
   
   lasso_grid_tf %>%
   collect_metrics() %>%
-  mutate(bow = "tf") %>%
+  filter(.metric == "roc_auc") %>%
+  mutate(model_type = "tf") %>%
   rbind(lasso_grid_tfidf %>% 
-          mutate(bow = "tfidf") %>%
+          mutate(model_type = "tfidf") %>%
+  collect_metrics()) %>%
+  rbind(lasso_grid_smote %>% 
+          mutate(model_type = "smote") %>%
   collect_metrics()) %>%
   ggplot(aes(penalty, mean, color = bow)) +
   geom_line(linetype = "dashed") +
-  facet_wrap(~.metric) +
+  facet_wrap(~.metric, ncol = 1) +
   scale_x_log10() + 
   theme_minimal() + 
   guides(color = NULL)
 
+```
+
+```{r}
+# The positive predictive value (ppv()) is defined as the percent of predicted positives that are actually positive while the negative predictive value (npv()) is defined as the percent of negative positives that are actually negative.
+# The positive predictive value (ppv()) is defined as the percent of predicted positives that are actually positive
+show_best(lasso_grid_tfidf, "npv", n = 10)
+#  the negative predictive value (npv()) is defined as the percent of negative positives that are actually negative
+show_best(lasso_grid_tfidf, "ppv", n = 10)
+# average of the precision and recall
+show_best(lasso_grid_tfidf, "bal_accuracy", n = 10)
+show_best(lasso_grid_tfidf, "roc_auc", n = 10)
+show_best(lasso_grid_tfidf, "f_meas", n = 10)
 ```
 
 
@@ -407,10 +456,10 @@ The tfidf BoW model with the penalty of 0.003764936 seems to slightly out-perfor
 
 ```{r}
 ## pull the best model specification using cohen's kappa as the relevant metric
-best_penalty_tf <- select_best(lasso_grid_tf, metric =  "f_meas")
-show_best(lasso_grid_tf, metric =  "f_meas")
-best_penalty_tfidf <- select_best(lasso_grid_tfidf, metric =  "f_meas")
-show_best(lasso_grid_tfidf, metric =  "f_meas")
+best_penalty_tf <- select_best(lasso_grid_tf, metric =  "roc_auc")
+show_best(lasso_grid_tf, metric =  "roc_auc")
+best_penalty_tfidf <- select_best(lasso_grid_tfidf, metric =  "roc_auc")
+show_best(lasso_grid_tfidf, metric =  "roc_auc")
 ## final workflow for the lasso logistic regression model
 final_lasso_wf <- finalize_workflow(
   lasso_wf,
@@ -441,15 +490,14 @@ test_predictions %>%
 
 ```
 
+
 ### Random forests
 
 Next, a random forests models following ``ranger``'s implementation. First we will implement one attributing the same costs for all miss-classifications and later we will implement a cost sensitive one.
 
-Not fitting...keeps crashing...
-
 #### Models
 
-```{r }
+```{r eval=FALSE, include=FALSE}
 ### Baseline
 rf_base <- rand_forest(
   mtry = tune(),
@@ -460,7 +508,8 @@ rf_base <- rand_forest(
   set_engine(
     engine = "ranger",
     seed = 1234,
-    importance = "impurity"
+    importance = "impurity",
+    splitrule = "gini"
   )
 
 ### Cost-sensitive
@@ -487,7 +536,7 @@ Tunable hyperparameters^[[see](https://arxiv.org/pdf/1804.03515.pdf)]:
   - Node size (min_n). The node size parameter specifies the minimum number of observations in a terminal node. Low values lead to trees with a larger depth and so more splits are performed until the terminal nodes.
   
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 # tuning grid
 param_grid <- grid_regular(mtry(range = c(50, 80)),
                            min_n(range(2, 60)),
@@ -495,14 +544,13 @@ param_grid <- grid_regular(mtry(range = c(50, 80)),
 
 # bootstraping for the parameter tunning. 10 bootstraps
 set.seed(1234)
-ecthr_boot <- bootstraps(train_data, times = 10, strata = "ecthr_label")
-ecthr_boot
+cv_samples <- bootstraps(train_data, times = 10, strata = "ecthr_label")
+cv_samples
 ```
 
 #### Prepare the workflows
 
-
-```{r}
+```{r eval=FALSE, include=FALSE}
 ## Prep the workflow: TF
 rf_base_wf <- workflow() %>%
   add_recipe(
@@ -523,7 +571,7 @@ rf_cs_wf <- workflow() %>%
 rf_cs_wf
 ```
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 ### train
 ## baseline
 # parallelize
@@ -531,7 +579,7 @@ doParallel::registerDoParallel()
 set.seed(1234)
 rf_grid_base <- tune_grid(
   rf_base_wf,
-  resamples = ecthr_boot,
+  resamples = cv_samples,
   grid = param_grid,
   control = control_grid(verbose = FALSE, save_pred = TRUE),
   metrics = metric_set(accuracy, roc_auc, bal_accuracy, f_meas)
@@ -546,7 +594,7 @@ doParallel::registerDoParallel()
 set.seed(1234)
 rf_grid_cs <- tune_grid(
   rf_cs_wf,
-  resamples = ecthr_boot,
+  resamples = cv_samples,
   grid = param_grid,
   control = control_grid(verbose = FALSE, save_pred = TRUE),
   metrics = metric_set(accuracy, roc_auc, bal_accuracy, f_meas)
@@ -556,7 +604,7 @@ rf_grid_cs <- tune_grid(
 autoplot(rf_grid_cs)
 ```
 
-```{r}
+```{r eval=FALSE, include=FALSE}
   autoplot(lasso_grid_tf) +
   theme_minimal()
   autoplot(lasso_grid_tfidf) +
