@@ -37,7 +37,7 @@ Training a classifier for identifying whether a (machine-translated) news articl
 Load the packages.
 
 ```{r}
-packs <- c("knitr", "rmdformats", "tidymodels", "textrecipes", "tidyverse", "themis", "ranger")
+packs <- c("knitr", "rmdformats", "tidymodels", "textrecipes", "tidyverse", "themis", "ranger", "glmnet")
 for (pack in packs){
   
   if (!pack %in% installed.packages()[,1]) {
@@ -65,7 +65,8 @@ Load the model dataset...
 model_data <- read_csv("../../data/model_data.csv.gz") %>%
   mutate(model_id = paste(case_id, article_id, sep = "_"),
          ecthr_label = as_factor(ecthr_label)) %>%
-  select(ecthr_label, text, article_nchar, date_distance, cosine_similarity_tf, jaccard_distance, lang_og = source_lang_alpha2, model_id)
+  select(ecthr_label, text, article_nchar, date_distance, cosine_similarity_tf, jaccard_distance, lang_og = source_lang_alpha2, contains("ner"), country_match_ratio, model_id) %>%
+  drop_na()
 glimpse(model_data)
 ```
 
@@ -100,15 +101,52 @@ TF-IDF seemed problematic in this instance given that the most relevant words we
   3. For each dyad, we tokenized them using [a language specific tokenizers](https://stanfordnlp.github.io/stanza/) and extract morphological information for each word (*idem*). We first filtered the docs by pos-tags^[Namely, the following universal pos-tags were kept: "VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"; check https://universaldependencies.org/u/pos/]. Removed stop-words using a [language specific corpus](https://github.com/stopwords-iso/stopwords-iso). Tokenized them into 1-5 ngrams and computed their corpus length normalized term frequencies. 
   4. As for comparison, I first computed their [cosine similarity](https://www.sciencedirect.com/topics/computer-science/cosine-similarity) and then the [jaccard distance](https://en.wikipedia.org/wiki/Jaccard_index) between the tokens in each vector.
 
-## Date distance
+```{r}
+model_data %>% group_by(ecthr_label) %>% summarise(mean_cos = IQR(cosine_similarity_tf), mean_jac = IQR(jaccard_distance))
 
-Took the difference in the number of days between the judgment date and the publication date for the article. Articles covering the ruling are expected to be more likely in the days leading to or following the ruling. Though on its own, its seems unlikely. Interacted, possibly.
+model_data %>%
+  ggplot(aes(x = ecthr_label, cosine_similarity_tf)) + 
+  geom_boxplot() + 
+  theme_minimal()
+
+
+model_data %>%
+  ggplot(aes(x = ecthr_label, jaccard_distance)) + 
+  geom_boxplot() + 
+  theme_minimal()
+```
+
+## NER ratios
+
+We further extracted recognized the named entities from the articles using [spacy](https://spacy.io/), counted their frequencies and normalized them by dividing the counts by the number of words in the text.
 
 ```{r}
 model_data %>%
-  group_by(ecthr_label) %>%
-  summarise(mean_dd = mean(date_distance)) %>%
-  ungroup()
+  select(contains("ner")) %>%
+  glimpse()
+```
+
+## country match ratio
+
+Similarly, we extracted all mentions of countries using the above-mentioned algorithm. Next, we counted the number of country matches with the country which was party with the case and normalized these counts by dividing it from all the country mentions.
+
+```{r}
+model_data %>%
+  ggplot(aes(ecthr_label, country_match_ratio)) + 
+  geom_boxplot() +
+  theme_minimal()
+```
+
+
+## Date distance
+
+Took the difference in the number of days between the judgment date and the publication date for the article. Articles covering the ruling are expected to be more likely in the days leading to or following the ruling. Though on its own, its seems unlikely.
+
+```{r}
+model_data %>%
+  ggplot(aes(x = ecthr_label, date_distance)) + 
+  geom_boxplot() + 
+  theme_minimal()
 ```
 
 ## Number of characters in article
@@ -120,6 +158,8 @@ Standard feature. Length of an article might indicate topic given current agenda
 Language of the text before translation, ``source_lang_alpha2`` to capture language-related weaknesses in the machine translation and its consequences in the coding.
 
 # Modeling
+
+## Sampling
 
 Split the data, 70% for training and the remaining for testing, stratified by article language. 
 
@@ -138,7 +178,6 @@ test_data %>%
   summarise(n = n())
 ```
 
-
 ### Class imbalance
 
 Highly skewed classes tend to lead to models overperforming in predicting the majority class and underperforming in the minority class. Two ways around it:
@@ -152,63 +191,61 @@ The latter comes at the cost of loosing information from the training set, e.g. 
 
 We start with the pre-processing. For this I will resort to ``recipes`` from tidymodels. This allows me to generate a pre-processing workflow which can be used in both training and testing datasets. For all the text-related pre-processing I will use ``textrecipes``, [details here](https://github.com/tidymodels/textrecipes).
 
+While stemming and stop-words removal may not be optimal, they seem to be the best alternative for reducing the dimensions of the text features while loosing the least information. Models without these steps constantly crashed. For the same reason, I restricted the ngrams to 1-3.
+
 Starting with the text. Will create three recipes. 
 
   1. tf_main:
   
-  - tf vectors (1-4 ngrams)
+  - tf vectors (1-3 ngrams)
   - no stopwords
-  - tf > 20
+  - stemmed
+  - tf > 2
   - main sampling
   - number of character natural logged
   - lang to dummies
   - random sample
 
-```{r}
-tf_main <- recipe(ecthr_label ~ ., data = train_data) %>%
-  step_naomit(everything()) %>%
-  step_filter(text != "" & !is.na(text)) %>%
-  step_tokenize(text) %>%
-  step_stopwords(text, keep = FALSE) %>%
-  step_tokenfilter(text, min_times = 20) %>%
-  step_untokenize(text) %>%
-  step_tokenize(text, token = "ngrams", options = list(n = 4, n_min = 1)) %>%
-  step_tf(text) %>%
-  step_log(article_nchar) %>%
-  step_dummy(lang_og) %>%
-  update_role(model_id, new_role = "id variable") %>%
-  prep(training = train_data)
 
+```{r}
+tf_main <- recipe(ecthr_label ~ ., 
+                  data = train_data) %>%
+  update_role(model_id, new_role = "id variable") %>%
+  step_dummy(lang_og) %>%
+  step_log(article_nchar) %>%
+  step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1)) %>%
+  step_stem(text) %>%
+  step_stopwords(text, keep = FALSE, stopword_source = "stopwords-iso") %>%
+  step_tokenfilter(text, min_times = 2)  %>%
+  step_tf(text)
 ## the recipe
 tf_main
-str(juice(tf_main), list.len = 20)
 ```
 
     
   2. tfidf_main:
   
-  - tfdf vectors (1-4 ngrams)
+  - tf-idf vectors (1-3 ngrams)
   - no stopwords
-  - tf > 20
+  - stemmed
+  - tf > 2
   - main sampling
   - number of character natural logged
+  - lang to dummies
   - random sample
 
-```{r}
-tfidf_main <- recipe(ecthr_label ~ ., data = train_data) %>%
-  step_naomit(everything()) %>%
-  step_filter(text != "" & !is.na(text)) %>%
-  step_tokenize(text)  %>%
-  step_stopwords(text, keep = FALSE) %>%
-  step_tokenfilter(text, min_times = 20) %>%
-  step_untokenize(text) %>%
-  step_tokenize(text, token = "ngrams", options = list(n = 4, n_min = 1)) %>%
-  step_tfidf(text) %>%
-  step_log(article_nchar) %>%
-  step_dummy(lang_og) %>%
-  update_role(model_id, new_role = "id variable") %>%
-  prep(training = train_data)
 
+```{r}
+tfidf_main <- recipe(ecthr_label ~ ., 
+                  data = train_data) %>%
+  update_role(model_id, new_role = "id variable") %>%
+  step_dummy(lang_og) %>%
+  step_log(article_nchar) %>%
+  step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1)) %>%
+  step_stem(text) %>%
+  step_stopwords(text, keep = FALSE, stopword_source = "stopwords-iso") %>%
+  step_tokenfilter(text, min_times = 2)  %>%
+  step_tfidf(text)
 ## the recipe
 tfidf_main
 ```
@@ -223,87 +260,321 @@ tfidf_main
   - number of character natural logged
   - "Synthetic Minority Over-sampling Technique" ([see](https://arxiv.org/abs/1106.1813))
   
-```{r eval=FALSE, include=TRUE}
+```{r eval=FALSE, include=FALSE}
 ## BUG
-tf_smote <- recipe(ecthr_label ~ ., data = train_data) %>%
-  step_naomit(everything()) %>%
-  step_filter(text != "" & !is.na(text)) %>%
-  step_tokenize(text) %>%
-  step_stopwords(text, keep = FALSE) %>%
-  step_tokenfilter(text, min_times = 20) %>%
-  step_untokenize(text) %>%
-  step_tokenize(text, token = "ngrams", options = list(n = 4, n_min = 1)) %>%
-  step_tf(text) %>%
-  step_log(article_nchar) %>%
-  step_dummy(lang_og) %>%
+tf_smote <- recipe(ecthr_label ~ .,
+                   data = train_data) %>%
   update_role(model_id, new_role = "id variable") %>%
-  step_smote(ecthr_label, seed = 1234) %>%
-  prep(training = train_data)
+  step_smote(ecthr_label, seed = 1234)%>%
+  step_dummy(lang_og) %>%
+  step_log(article_nchar) %>%
+  step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1)) %>%
+  step_stem(text) %>%
+  step_stopwords(text, keep = FALSE, stopword_source = "stopwords-iso") %>%
+  step_tokenfilter(text, min_times = 10)  %>%
+  step_tf(text)
 
 ## the recipe
 tf_smote
-table(juice(tf_smote$ecthr_label))
 ```
     
-  4. tf_main_stop:
-  
-  - tfdf vectors (1-5 ngrams)
-  - keep stopwords
-  - stemmed
-  - main sampling
-  - number of character natural logged
-  - random sample
+
+## Bulding the models
+
+The choice of models will be based on their (i) explainability (less black-box) and (ii) availability of implementation of cost-weights to compensate the class imbalance
+
+
+### Penalized logistic regression (LASSO)
+
+First, we fit a logistic regression penalized with a LASSO (least absolute shrinkage and selection operator)^[using ``glmnet``, [see](https://web.stanford.edu/~hastie/glmnet/glmnet_alpha.html)]] - adding a penalty term to the log likelihood function so as to shrink coefficients of the variables which contribute more to the error in te model to 0. Hence operating as feature selection. This should result in a more efficient model and less prone to overfitting. 
+
+
+This is particularly useful for us since we will be using text-features too. The selected penalty term will be chosen based on its ability to minimize out of sample prediction errors, namely via grid search of a vector of several penalty terms (lamda) and using bootstrap cross-validation.
+
+
+We will first, select the best model using the main recipe. We then select the best model from it, i.e. the best penalty term, and then we compare the performance of this model in the test-set accross different pre-processing recipes.
+
+#### model
 
 ```{r}
-tf_main_stop <- recipe(ecthr_label ~ ., data = train_data) %>%
-  step_naomit(everything()) %>%
-  step_filter(text != "" & !is.na(text)) %>%
-  step_tokenize(text) %>%
-  step_stopwords(text, keep = TRUE) %>%
-  step_tokenfilter(text, min_times = 20) %>%
-  step_untokenize(text) %>%
-  step_tokenize(text, token = "ngrams", options = list(n = 4, n_min = 1)) %>%
-  step_tf(text) %>%
-  step_log(article_nchar) %>%
-  step_dummy(lang_og) %>%
-  update_role(model_id, new_role = "id variable") %>%
-  prep(training = train_data)
-
-## the recipe
-tf_main_stop
-str(juice(tf_main_stop), list.len = 20)
+### penalized logistic regression (lasso)
+# penalty -> lambda; allowed to vary for hyperparameter tuning
+# mixture = 1 for lasso regression
+lasso_spec <- logistic_reg(penalty = tune(), mixture = 1) %>%
+  set_mode("classification") %>%
+  set_engine("glmnet")
 ```
 
-  5. tf_main_langtokens:
+
+#### Hyperparameter grid and bootstrap samples
+
+```{r}
+# tuning grid, range of 100 penalty values
+param_grid <- grid_regular(penalty(),
+                           levels = 100)
+
+# bootstraping for the parameter tunning. 10 bootstraps
+set.seed(1234)
+ecthr_boot <- bootstraps(train_data, times = 10, strata = "ecthr_label")
+ecthr_boot
+```
+
+
+#### Prepare the workflow
+
+We will add ``step_normalize(all_predictors())``, i.e. normalize all predictors, as it is recommended
+
+
+```{r}
+## Prep the workflow: TF
+lasso_wf_tf <- workflow() %>%
+  add_recipe(
+    tf_main %>% 
+      step_normalize(all_predictors(), -article_nchar) # since it is logged
+    ) %>%
+  add_model(lasso_spec)
+
+lasso_wf_tf
+
+## Prep the workflow: TFIDF
+lasso_wf_tfidf <- workflow() %>%
+  add_recipe(
+    tfidf_main %>% 
+      step_normalize(all_predictors(), -article_nchar) # since it is logged
+    ) %>%
+  add_model(lasso_spec)
+
+lasso_wf_tfidf
+```
+
+#### Training and tunning the model
+
+
+```{r}
+### identify the best lambda via grid search
+## TF
+# parallelize
+doParallel::registerDoParallel()
+set.seed(1234)
+lasso_grid_tf <- tune_grid(
+  lasso_wf_tf,
+  resamples = ecthr_boot,
+  grid = param_grid,
+  control = control_grid(verbose = FALSE, save_pred = TRUE),
+  metrics = metric_set(accuracy, roc_auc, bal_accuracy, f_meas)
+)
+
+### identify the best lambda via grid search
+## TFIDF
+# parallelize
+doParallel::registerDoParallel()
+set.seed(1234)
+lasso_grid_tfidf <- tune_grid(
+  lasso_wf_tfidf,
+  resamples = ecthr_boot,
+  grid = param_grid,
+  control = control_grid(verbose = FALSE, save_pred = TRUE),
+  metrics = metric_set(accuracy, roc_auc, bal_accuracy, f_meas)
+)
+
+```
+
+```{r}
+  autoplot(lasso_grid_tf) +
+  theme_minimal()
+  autoplot(lasso_grid_tfidf) +
+    theme_minimal()
   
-  - tfdf vectors (1-5 ngrams)
-  - no stopwords
-  - language specific tokens, i.e., we concatenate the language of the original text to the text to capture translation idionsyncracies
-  - main sampling
-  - number of character natural logged
-  - random sample
+  lasso_grid_tf %>%
+  collect_metrics() %>%
+  mutate(bow = "tf") %>%
+  rbind(lasso_grid_tfidf %>% 
+          mutate(bow = "tfidf") %>%
+  collect_metrics()) %>%
+  ggplot(aes(penalty, mean, color = bow)) +
+  geom_line(linetype = "dashed") +
+  facet_wrap(~.metric) +
+  scale_x_log10() + 
+  theme_minimal() + 
+  guides(color = NULL)
+
+```
 
 
-```{r eval=FALSE, include=TRUE}
-## bug
-tf_main_langtokens <- recipe(ecthr_label ~ ., data = train_data) %>%
-  step_naomit(everything()) %>%
-  step_filter(text != "" & !is.na(text)) %>%
-  step_tokenize(text) %>%
-  step_stopwords(text, keep = TRUE) %>%
-  step_tokenfilter(text, min_times = 10) %>%
-  step_untokenize(text) %>%
-  step_mutate(text = paste(lang_og, text)) %>%
-  step_rm(lang_og) %>%
-  step_tokenize(text, token = "ngrams", options = list(n = 4, n_min = 1)) %>%
-  step_tf(text) %>%
-  update_role(model_id, new_role = "id variable") %>%
-  prep(training = train_data)
+#### Select best model and finalize the workflow
 
-## the recipe
-tf_main_langtokens
-str(juice(tf_main_langtokens), list.len = 20)
+The tfidf BoW model with the penalty of 0.003764936 seems to slightly out-performs the other. Will take it as the final model.
+
+```{r}
+## pull the best model specification using cohen's kappa as the relevant metric
+best_penalty_tf <- select_best(lasso_grid_tf, metric =  "f_meas")
+show_best(lasso_grid_tf, metric =  "f_meas")
+best_penalty_tfidf <- select_best(lasso_grid_tfidf, metric =  "f_meas")
+show_best(lasso_grid_tfidf, metric =  "f_meas")
+## final workflow for the lasso logistic regression model
+final_lasso_wf <- finalize_workflow(
+  lasso_wf,
+  best_penalty_tfidf
+)
+```
+
+#### Evaluate on the test-set
+
+```{r}
+lasso_fit <- final_lasso_wf %>%
+  last_fit(the_split)
+```
+
+```{r}
+### evaluate with metrics
+test_performance <- lasso_fit %>% collect_metrics()
+test_performance
+```
+
+```{r}
+# generate predictions from the test set
+test_predictions <- lasso_fit %>% collect_predictions()
+
+## confusion matrix
+test_predictions %>%
+  conf_mat(ecthr_label, .pred_class)
+
+```
+
+### Random forests
+
+Next, a random forests models following ``ranger``'s implementation. First we will implement one attributing the same costs for all miss-classifications and later we will implement a cost sensitive one.
+
+Not fitting...keeps crashing...
+
+#### Models
+
+```{r }
+### Baseline
+rf_base <- rand_forest(
+  mtry = tune(),
+  min_n = tune(),
+  trees = 1000, # number of randomly samped predictor in each split when creating the trees
+) %>%
+  set_mode("classification") %>%
+  set_engine(
+    engine = "ranger",
+    seed = 1234,
+    importance = "impurity"
+  )
+
+### Cost-sensitive
+rf_cs <- rand_forest(
+  mtry = tune(),
+  min_n = tune(),
+  trees = 1000, # number of randomly samped predictor in each split when creating the trees
+) %>%
+  set_mode("classification") %>%
+  set_engine(
+    engine = "ranger",
+    seed = 1234,
+    importance = "impurity",
+    class.weights = c(0.01, 1) # cost sensitive learning, higher penalty for minority class)
+  )
 ```
 
 
 
+#### Hyperparameter grid and bootstrap samples
+
+Tunable hyperparameters^[[see](https://arxiv.org/pdf/1804.03515.pdf)]:
+  - The number of randomly drawn candidate variables out of which each split is selected when growing a tree (mtry). Lower values of mtry lead to less correlated trees which is good, however this might lead to decreases in average accuracy as the probability of not including a relevant variable increases. Traditionally, the default value proposed for balancing these concerns is $mtry=\sqrt{\#features}$.
+  - Node size (min_n). The node size parameter specifies the minimum number of observations in a terminal node. Low values lead to trees with a larger depth and so more splits are performed until the terminal nodes.
+  
+
+```{r}
+# tuning grid
+param_grid <- grid_regular(mtry(range = c(50, 80)),
+                           min_n(range(2, 60)),
+                           levels = 20)
+
+# bootstraping for the parameter tunning. 10 bootstraps
+set.seed(1234)
+ecthr_boot <- bootstraps(train_data, times = 10, strata = "ecthr_label")
+ecthr_boot
+```
+
+#### Prepare the workflows
+
+
+```{r}
+## Prep the workflow: TF
+rf_base_wf <- workflow() %>%
+  add_recipe(
+    tfidf_main %>% 
+      step_normalize(all_predictors(), -article_nchar) # since it is logged
+    ) %>%
+  add_model(rf_base)
+
+rf_base_wf
+
+rf_cs_wf <- workflow() %>%
+  add_recipe(
+    tfidf_main %>% 
+      step_normalize(all_predictors(), -article_nchar) # since it is logged
+    ) %>%
+  add_model(rf_cs)
+
+rf_cs_wf
+```
+
+```{r}
+### train
+## baseline
+# parallelize
+doParallel::registerDoParallel()
+set.seed(1234)
+rf_grid_base <- tune_grid(
+  rf_base_wf,
+  resamples = ecthr_boot,
+  grid = param_grid,
+  control = control_grid(verbose = FALSE, save_pred = TRUE),
+  metrics = metric_set(accuracy, roc_auc, bal_accuracy, f_meas)
+)
+
+autoplot(rf_grid_base)
+
+### train
+## cost-sensitive
+# parallelize
+doParallel::registerDoParallel()
+set.seed(1234)
+rf_grid_cs <- tune_grid(
+  rf_cs_wf,
+  resamples = ecthr_boot,
+  grid = param_grid,
+  control = control_grid(verbose = FALSE, save_pred = TRUE),
+  metrics = metric_set(accuracy, roc_auc, bal_accuracy, f_meas)
+)
+
+
+autoplot(rf_grid_cs)
+```
+
+```{r}
+  autoplot(lasso_grid_tf) +
+  theme_minimal()
+  autoplot(lasso_grid_tfidf) +
+    theme_minimal()
+  
+  lasso_grid_tf %>%
+  collect_metrics() %>%
+  mutate(bow = "tf") %>%
+  rbind(lasso_grid_tfidf %>% 
+          mutate(bow = "tfidf") %>%
+  collect_metrics()) %>%
+  ggplot(aes(penalty, mean, color = bow)) +
+  geom_line(linetype = "dashed") +
+  facet_wrap(~.metric) +
+  scale_x_log10() + 
+  theme_minimal() + 
+  guides(color = NULL)
+
+```
+
+  

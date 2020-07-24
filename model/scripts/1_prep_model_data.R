@@ -2,6 +2,9 @@
 ### Packs
 require(tidyverse)
 require(lubridate)
+require(spacyr)
+require(furrr)
+
 ### Dirs
 parent_dir <- '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news' 
 rulart_dyad_path <- paste(parent_dir, "features", "data", "interm_data", "rulings_article_dyad_data_raw.csv.gz", sep = "/")
@@ -39,9 +42,90 @@ arts_data <- left_join(arts_all, to_fill) %>% ## fill in missing
          date_distance = as.integer(judgment_date - date_published)) %>%
   select(ecthr_label, article_id, case_id, text, article_nchar, source_lang_alpha2, date_distance, date_published, judgment_date)
 
+#### NER variables -----------------------------------------------------------------------------------------
+### From spacy, extract all named entities
+
+if (!file.exists(paste(parent_dir, "model", "data", "interm_data", "ner_data.csv.gz", sep = "/"))) {
+  
+# initialize spacy
+spacyr::spacy_initialize()
+## turn text and id to a named vector
+docs <- arts_data$text %>%
+  set_names(arts_data$article_id)
+## parse
+parsed <- spacy_parse(
+  x = docs, 
+  lemma = FALSE, 
+  entity = TRUE, 
+  pos = FALSE, 
+  multithread = TRUE
+)
+
+## export
+just_ner <- parsed %>%
+  rename(article_id = doc_id) %>%
+  group_by(article_id) %>% 
+  mutate(token_n = n()) %>% 
+  ungroup() %>% 
+  filter(nchar(entity) > 0) %>% 
+  group_by(article_id) %>% 
+  mutate(entity_n = n()) %>% 
+  ungroup()
+
+write_csv(just_ner,
+          path = gzfile(paste(parent_dir, "model", "data", "interm_data", "ner_data.csv.gz", sep = "/")))
+
+spacyr::spacy_finalize()
+
+} else {
+  
+  just_ner <- read_csv(paste(parent_dir, "model", "data", "interm_data", "ner_data.csv.gz", sep = "/"))
+  
+  
+}
+
+### first batch of vars: NER counts normalized by number of words
+ner_counts <- just_ner %>%
+  select(article_id, entity, token_n, entity_n) %>%
+  mutate(entity = str_remove(entity, "\\_.*?$"),
+         entity = str_to_lower(entity)) %>%
+  count(article_id, token_n, entity_n, entity) %>%
+  mutate(entity_count_norm = n/token_n) %>%
+  pivot_wider(names_from = "entity", names_prefix = "ner_", values_from = "entity_count_norm", values_fill = 0) %>%
+  select(-token_n, -entity_n) %>%
+  distinct(article_id, .keep_all = TRUE)
+
+## join
+nercounts_added <- arts_data %>%
+  left_join(ner_counts)
+
+### country mention ratio
+## extract the mentions to countries, standardize them, make a ratio of countries to case country
+## ner countries
+ner_countries <- just_ner %>%
+  filter(str_detect(entity, "GPE")) %>%
+  left_join(arts_data %>%
+              select(article_id, source_lang_alpha2)) %>%
+  mutate(match_country = future_map_chr(token, ~countrycode::countrycode(.x, origin = 'country.name', destination = 'iso2c')),
+         match_country = match_country %>% str_to_lower()) %>%
+  mutate(country_match_ratio = source_lang_alpha2 == match_country) %>%
+  group_by(article_id) %>%
+  summarise(country_match_ratio = mean(country_match_ratio, na.rm = TRUE),
+            country_match_ratio = ifelse(is.nan(country_match_ratio),
+                                         0, 
+                                         country_match_ratio)) %>%
+  ungroup()
+
+## add it
+countrymatch_added <- nercounts_added %>%
+  left_join(ner_countries) %>%
+  mutate(country_match_ratio = ifelse(is.na(country_match_ratio),
+                                      0, 
+                                      country_match_ratio))
+
 #### Make the final dataset ----------------------------------------------------------------------
 ### combine
-dataset_all <- arts_data %>%
+dataset_all <- countrymatch_added %>%
   left_join(stringdist)
 
 ### modeling data
