@@ -557,7 +557,7 @@ write_rds(lasso_fit,
 
 ### Random forests
 
-Next, a random forests models following ``ranger``'s implementation. First we will implement one attributing the same costs for all miss-classifications and later we will implement a cost sensitive one.
+Next, a random forests models following ``ranger``'s implementation. Will implement a cost-sensitive one (i.e. highest cost to miss-classifications of the minority class)
 
 #### Models
 
@@ -565,7 +565,6 @@ Next, a random forests models following ``ranger``'s implementation. First we wi
 ### Baseline
 rf_base <- rand_forest(
   mtry = tune(),
-  min_n = tune(),
   trees = 1000, # number of randomly samped predictor in each split when creating the trees
 ) %>%
   set_mode("classification") %>%
@@ -573,14 +572,12 @@ rf_base <- rand_forest(
     engine = "ranger",
     seed = 1234,
     importance = "impurity",
-    splitrule = "gini",
     num.threads = 4
   )
 
 ### Cost-sensitive
 rf_cs <- rand_forest(
   mtry = tune(),
-  min_n = tune(),
   trees = 1000, # number of randomly samped predictor in each split when creating the trees
 ) %>%
   set_mode("classification") %>%
@@ -594,7 +591,7 @@ rf_cs <- rand_forest(
 ```
 
 
-#### Hyperparameter grid and bootstrap samples
+#### Hyperparameter grid 
 
 Tunable hyperparameters^[[see](https://arxiv.org/pdf/1804.03515.pdf)]:
   - The number of randomly drawn candidate variables out of which each split is selected when growing a tree (mtry). Lower values of mtry lead to less correlated trees which is good, however this might lead to decreases in average accuracy as the probability of not including a relevant variable increases. Traditionally, the default value proposed for balancing these concerns is $mtry=\sqrt{\#features}$.
@@ -615,21 +612,21 @@ param_grid
 #### Prepare the workflows
 
 ```{r}
-
 if (exists("tfidf_main")) {
   
   final_workflow <- tfidf_main
   
 } else {
   
-  final_workflow <- recipe(ecthr_label ~ ., 
-                  data = train_data) %>%
+  final_workflow <- recipe(ecthr_label ~ ., data = train_data) %>%
   update_role(model_id, new_role = "id variable") %>%
   step_dummy(lang_og) %>%
   step_log(article_nchar) %>%
-  step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1, ngram_delim = "_")) %>%
+  step_tokenize(text)  %>%
   step_stem(text) %>%
   step_stopwords(text, keep = FALSE, stopword_source = "stopwords-iso") %>%
+  step_untokenize(text) %>%
+  step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1, ngram_delim = "_")) %>%
   step_tokenfilter(text, min_times = 2, max_tokens = 800)   %>%
   step_tfidf(text)
   
