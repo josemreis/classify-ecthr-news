@@ -37,7 +37,7 @@ Training a classifier for identifying whether a (machine-translated) news articl
 Load the packages.
 
 ```{r}
-packs <- c("knitr", "rmdformats", "tidymodels", "textrecipes", "tidyverse", "themis", "ranger", "glmnet")
+packs <- c("knitr", "rmdformats", "tidymodels", "textrecipes", "tidyverse", "themis", "ranger", "glmnet", "tidypredict")
 for (pack in packs){
   
   if (!pack %in% installed.packages()[,1]) {
@@ -118,7 +118,7 @@ model_data %>%
 
 ## NER ratios
 
-We further extracted recognized the named entities from the articles using [spacy](https://spacy.io/), counted their frequencies and normalized them by dividing the counts by the number of words in the text.
+  We further extracted recognized the named entities from the articles using [spacy](https://spacy.io/), counted their frequencies and normalized them by dividing the counts by the number of words in the text.
 
 ```{r}
 model_data %>%
@@ -149,7 +149,7 @@ model_data %>%
   theme_minimal()
 ```
 
-## Number of characters in article
+  ## Number of characters in article
 
 Standard feature. Length of an article might indicate topic given current agenda cycle, though it may go in any direction.
 
@@ -210,7 +210,7 @@ Starting with the text. Will create three recipes.
   - tf vectors (1-3 ngrams)
   - no stopwords
   - stemmed
-  - tf > 2, keep top 2000 words
+  - tf > 2, max top words as tuneable
   - main sampling
   - number of character natural logged
   - lang to dummies
@@ -223,10 +223,10 @@ tf_main <- recipe(ecthr_label ~ .,
   update_role(model_id, new_role = "id variable") %>%
   step_dummy(lang_og) %>%
   step_log(article_nchar) %>%
-  step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1)) %>%
+  step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1, ngram_delim = "_")) %>%
   step_stem(text) %>%
   step_stopwords(text, keep = FALSE, stopword_source = "stopwords-iso") %>%
-  step_tokenfilter(text, min_times = 2, max_tokens = 2000)  %>%
+  step_tokenfilter(text, min_times = 2, max_tokens = 800)  %>%
   step_tf(text)
 ## the recipe
 tf_main
@@ -238,7 +238,7 @@ tf_main
   - tf-idf vectors (1-3 ngrams)
   - no stopwords
   - stemmed
-  - tf > 2, keep top 2000 words
+  - tf > 2, max top-words..
   - main sampling
   - number of character natural logged
   - lang to dummies
@@ -251,44 +251,43 @@ tfidf_main <- recipe(ecthr_label ~ .,
   update_role(model_id, new_role = "id variable") %>%
   step_dummy(lang_og) %>%
   step_log(article_nchar) %>%
-  step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1)) %>%
+  step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1, ngram_delim = "_")) %>%
   step_stem(text) %>%
   step_stopwords(text, keep = FALSE, stopword_source = "stopwords-iso") %>%
-  step_tokenfilter(text, min_times = 2, max_tokens = 2000)   %>%
+  step_tokenfilter(text, min_times = 2, max_tokens = 800)   %>%
   step_tfidf(text)
 ## the recipe
 tfidf_main
 ```
 
   
-  3. tf_smote:
+  3. tfidf_upsample:
   
   - tf-idf vectors (1-3 ngrams)
   - no stopwords
   - stemmed
-  - tf > 2, keep top 2000 words
+  - tf > 2, max top words as tuneable
   - main sampling
   - number of character natural logged
   - lang to dummies
-  - For dealing with imbalance: "Synthetic Minority Over-sampling Technique" ([see](https://arxiv.org/abs/1106.1813)); generate synthetic observations based on nearest neighbors
+  - For dealing with imbalance: upsample (https://link.springer.com/content/pdf/10.1007/s10618-012-0295-5.pdf)
   
   
 ```{r}
-tfidf_smote <- recipe(ecthr_label ~ .,
-                   data = train_data) %>%
-  step_dummy(all_nominal(), -c(text, ecthr_label, model_id)) %>%
-  step_log(article_nchar) %>%
-  step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1)) %>%
-  step_stem(text) %>%
-  step_stopwords(text, keep = FALSE, stopword_source = "stopwords-iso") %>%
-  step_tokenfilter(text, min_times = 2, max_tokens = 2000)  %>%
-  step_tfidf(text) %>%
-  step_rm(model_id) %>%
-  step_smote(ecthr_label, seed = 321) 
-  
-
-## the recipe
-tfidf_smote
+# tfidf_upsample <- recipe(ecthr_label ~ .,
+#                    data = train_data) %>%
+#   step_dummy(all_nominal(), -c(text, ecthr_label, model_id)) %>%
+#   step_log(article_nchar) %>%
+#   step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1)) %>%
+#   step_stem(text) %>%
+#   step_stopwords(text, keep = FALSE, stopword_source = "stopwords-iso") %>%
+#   step_tokenfilter(text, min_times = 2, max_tokens = 800)  %>%
+#   step_tfidf(text) %>%
+#   step_rm(model_id) %>%
+#   step_upsample(ecthr_class, seed = 1234)
+# 
+# ## the recipe
+# tfidf_upsample
 ```
     
 
@@ -320,11 +319,13 @@ lasso_spec <- logistic_reg(penalty = tune(), mixture = 1) %>%
 
 #### Hyperparameter grid
 
-```{r}
-# tuning grid, range of 100 penalty values
-param_grid <- grid_regular(penalty(),
-                           levels = 100)
 
+```{r}
+# tuning grid, range of 10 penalty values and max token values
+param_grid <- grid_regular(penalty(),
+                           levels = 20)
+
+param_grid
 ```
 
 
@@ -354,19 +355,18 @@ lasso_wf_tfidf <- workflow() %>%
 
 lasso_wf_tfidf
 
-## Prep the workflow: smote sampling
-lasso_wf_smote <- workflow() %>%
-  add_recipe(
-    tfidf_smote %>% 
-      step_normalize(all_predictors(), -article_nchar)
-    ) %>%
-  add_model(lasso_spec)
-
-lasso_wf_smote
+# ## Prep the workflow: upsample sampling
+# lasso_wf_upsample <- workflow() %>%
+#   add_recipe(
+#     tfidf_upsample %>% 
+#       step_normalize(all_predictors(), -article_nchar)
+#     ) %>%
+#   add_model(lasso_spec)
+# 
+# lasso_wf_upsample
 ```
 
 #### Training and tunning the model
-
 
 ```{r}
 ### identify the best lambda via grid search
@@ -382,6 +382,17 @@ lasso_grid_tf <- tune_grid(
   metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv)
 )
 
+## plot the metrics
+autoplot(lasso_grid_tf) +
+theme_minimal() + 
+ggtitle("tf model")
+
+### Confusion matrices by roc-auc
+lasso_grid_tf %>%
+collect_predictions() %>%
+filter(.config == select_best(lasso_grid_tf, metric = "roc_auc")$.config) %>%
+conf_mat(ecthr_label, .pred_class)
+
 ### identify the best lambda via grid search
 ## TFIDF
 # parallelize
@@ -395,47 +406,44 @@ lasso_grid_tfidf <- tune_grid(
   metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv)
 )
 
+## plot the metrics
+autoplot(lasso_grid_tfidf) +
+theme_minimal() + 
+ggtitle("tfidf model")
+
+### Confusion matrices by roc-auc
+lasso_grid_tfidf %>%
+collect_predictions() %>%
+filter(.config == select_best(lasso_grid_tfidf, metric = "roc_auc")$.config) %>%
+conf_mat(ecthr_label, .pred_class)
+
 ### identify the best lambda via grid search
-## TFIDF SMOTE
+## TFIDF upsample
 # parallelize
-doParallel::registerDoParallel()
-set.seed(1234)
-lasso_grid_smote <- tune_grid(
-  lasso_wf_smote,
-  resamples = cv_samples,
-  grid = param_grid,
-  control = control_grid(verbose = FALSE, save_pred = TRUE),
-  metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv)
-)
+# doParallel::registerDoParallel()
+# set.seed(1234)
+# lasso_grid_upsample <- tune_grid(
+#   lasso_wf_upsample,
+#   resamples = cv_samples,
+#   grid = param_grid,
+#   control = control_grid(verbose = FALSE, save_pred = TRUE),
+#   metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv)
+# )
+# 
+# ## plot the metrics
+# autoplot(lasso_grid_upsample) +
+# theme_minimal() + 
+# ggtitle("upsample model")
+# 
+# ### Confusion matrices by roc-auc
+# lasso_grid_upsample %>%
+# collect_predictions() %>%
+# filter(.config == select_best(lasso_grid_upsample, metric = "roc_auc")$.config) %>%
+# conf_mat(ecthr_label, .pred_class)
 
 ```
 
-```{r}
-  autoplot(lasso_grid_tf) +
-  theme_minimal()
-  autoplot(lasso_grid_tfidf) +
-    theme_minimal()
-  autoplot(lasso_grid_smote) +
-    theme_minimal()
-  
-  lasso_grid_tf %>%
-  collect_metrics() %>%
-  filter(.metric == "roc_auc") %>%
-  mutate(model_type = "tf") %>%
-  rbind(lasso_grid_tfidf %>% 
-          mutate(model_type = "tfidf") %>%
-  collect_metrics()) %>%
-  rbind(lasso_grid_smote %>% 
-          mutate(model_type = "smote") %>%
-  collect_metrics()) %>%
-  ggplot(aes(penalty, mean, color = bow)) +
-  geom_line(linetype = "dashed") +
-  facet_wrap(~.metric, ncol = 1) +
-  scale_x_log10() + 
-  theme_minimal() + 
-  guides(color = NULL)
 
-```
 
 ```{r}
 # The positive predictive value (ppv()) is defined as the percent of predicted positives that are actually positive while the negative predictive value (npv()) is defined as the percent of negative positives that are actually negative.
@@ -452,20 +460,40 @@ show_best(lasso_grid_tfidf, "f_meas", n = 10)
 
 #### Select best model and finalize the workflow
 
-The tfidf BoW model with the penalty of 0.003764936 seems to slightly out-performs the other. Will take it as the final model.
 
 ```{r}
-## pull the best model specification using cohen's kappa as the relevant metric
-best_penalty_tf <- select_best(lasso_grid_tf, metric =  "roc_auc")
-show_best(lasso_grid_tf, metric =  "roc_auc")
-best_penalty_tfidf <- select_best(lasso_grid_tfidf, metric =  "roc_auc")
-show_best(lasso_grid_tfidf, metric =  "roc_auc")
-## final workflow for the lasso logistic regression model
-final_lasso_wf <- finalize_workflow(
-  lasso_wf,
-  best_penalty_tfidf
-)
+## pull the best model specification using roc_auc metric
+models <- list("tf" = lasso_grid_tf, 
+                           "tfidf" = lasso_grid_tfidf)
+
+best_params <- map2_df(models, names(models),
+                      ~ show_best(.x, metric = "roc_auc") %>%
+                        mutate(model_type = .y))
+
+## slice the best parameters
+(final_model <- best_params %>%
+  arrange(desc(mean)) %>%
+  slice(1))
+
+## select the best workflow
+if (final_model$model_type[1] == "tf") {
+  
+  final_lasso_wf <- finalize_workflow(
+  lasso_wf_tf,
+  final_model %>% select(penalty, .config)
+  )
+  
+} else {
+  
+  final_lasso_wf <- finalize_workflow(
+  lasso_wf_tfidf,
+  final_model %>% select(penalty, .config)
+  )
+  
+} 
+
 ```
+
 
 #### Evaluate on the test-set
 
@@ -473,6 +501,7 @@ final_lasso_wf <- finalize_workflow(
 lasso_fit <- final_lasso_wf %>%
   last_fit(the_split)
 ```
+
 
 ```{r}
 ### evaluate with metrics
@@ -491,13 +520,48 @@ test_predictions %>%
 ```
 
 
+#### Fitting the final model
+
+Fit the final model on the entire trained dataset.
+
+```{r}
+final_model <- fit(final_lasso_wf, model_data)
+
+final_model
+```
+
+
+#### Variable importance
+
+```{r}
+lasso_fit %>% 
+  pluck(".workflow", 1) %>%   
+  pull_workflow_fit() %>% 
+  vip::vip(num_features = 40) + 
+  theme_minimal()
+```
+
+#### Export the final model
+
+```{r eval=FALSE, include=TRUE}
+
+write_rds(final_model,
+          path =  "models/lasso_model.Rds",
+          compress = "gz")
+
+write_rds(lasso_fit,
+          path =  "models/lasso_workflow.Rds",
+          compress = "gz")
+```
+
+
 ### Random forests
 
 Next, a random forests models following ``ranger``'s implementation. First we will implement one attributing the same costs for all miss-classifications and later we will implement a cost sensitive one.
 
 #### Models
 
-```{r eval=FALSE, include=FALSE}
+```{r}
 ### Baseline
 rf_base <- rand_forest(
   mtry = tune(),
@@ -509,7 +573,8 @@ rf_base <- rand_forest(
     engine = "ranger",
     seed = 1234,
     importance = "impurity",
-    splitrule = "gini"
+    splitrule = "gini",
+    num.threads = 4
   )
 
 ### Cost-sensitive
@@ -522,11 +587,11 @@ rf_cs <- rand_forest(
   set_engine(
     engine = "ranger",
     seed = 1234,
+    num.threads = 4,
     importance = "impurity",
     class.weights = c(0.01, 1) # cost sensitive learning, higher penalty for minority class)
   )
 ```
-
 
 
 #### Hyperparameter grid and bootstrap samples
@@ -536,25 +601,44 @@ Tunable hyperparameters^[[see](https://arxiv.org/pdf/1804.03515.pdf)]:
   - Node size (min_n). The node size parameter specifies the minimum number of observations in a terminal node. Low values lead to trees with a larger depth and so more splits are performed until the terminal nodes.
   
 
-```{r eval=FALSE, include=FALSE}
+```{r}
 # tuning grid
-param_grid <- grid_regular(mtry(range = c(50, 80)),
+param_grid <- grid_regular(mtry(range = c(50, 100)),
                            min_n(range(2, 60)),
                            levels = 20)
 
-# bootstraping for the parameter tunning. 10 bootstraps
-set.seed(1234)
-cv_samples <- bootstraps(train_data, times = 10, strata = "ecthr_label")
-cv_samples
+param_grid
+
 ```
+
 
 #### Prepare the workflows
 
-```{r eval=FALSE, include=FALSE}
-## Prep the workflow: TF
+```{r}
+
+if (exists("tfidf_main")) {
+  
+  final_workflow <- tfidf_main
+  
+} else {
+  
+  final_workflow <- recipe(ecthr_label ~ ., 
+                  data = train_data) %>%
+  update_role(model_id, new_role = "id variable") %>%
+  step_dummy(lang_og) %>%
+  step_log(article_nchar) %>%
+  step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1, ngram_delim = "_")) %>%
+  step_stem(text) %>%
+  step_stopwords(text, keep = FALSE, stopword_source = "stopwords-iso") %>%
+  step_tokenfilter(text, min_times = 2, max_tokens = 800)   %>%
+  step_tfidf(text)
+  
+}
+
+## Prep the workflow
 rf_base_wf <- workflow() %>%
   add_recipe(
-    tfidf_main %>% 
+    final_workflow %>% 
       step_normalize(all_predictors(), -article_nchar) # since it is logged
     ) %>%
   add_model(rf_base)
@@ -563,7 +647,7 @@ rf_base_wf
 
 rf_cs_wf <- workflow() %>%
   add_recipe(
-    tfidf_main %>% 
+    final_workflow %>% 
       step_normalize(all_predictors(), -article_nchar) # since it is logged
     ) %>%
   add_model(rf_cs)
@@ -571,7 +655,10 @@ rf_cs_wf <- workflow() %>%
 rf_cs_wf
 ```
 
-```{r eval=FALSE, include=FALSE}
+
+#### Training and tunning the model
+
+```{r}
 ### train
 ## baseline
 # parallelize
@@ -582,10 +669,18 @@ rf_grid_base <- tune_grid(
   resamples = cv_samples,
   grid = param_grid,
   control = control_grid(verbose = FALSE, save_pred = TRUE),
-  metrics = metric_set(accuracy, roc_auc, bal_accuracy, f_meas)
+  metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv)
 )
 
-autoplot(rf_grid_base)
+## plot the metrics
+autoplot(rf_grid_base) +
+theme_minimal()
+
+### Confusion matrices by roc-auc
+rf_grid_base %>%
+collect_predictions() %>%
+filter(.config == select_best(rf_grid_base, metric = "roc_auc")$.config) %>%
+conf_mat(ecthr_label, .pred_class)
 
 ### train
 ## cost-sensitive
@@ -597,32 +692,64 @@ rf_grid_cs <- tune_grid(
   resamples = cv_samples,
   grid = param_grid,
   control = control_grid(verbose = FALSE, save_pred = TRUE),
-  metrics = metric_set(accuracy, roc_auc, bal_accuracy, f_meas)
+  metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv)
 )
 
+## plot the metrics
+autoplot(rf_grid_base) +
+theme_minimal()
 
-autoplot(rf_grid_cs)
+### Confusion matrices by roc-auc
+rf_grid_cs %>%
+collect_predictions() %>%
+filter(.config == select_best(rf_grid_cs, metric = "roc_auc")$.config) %>%
+conf_mat(ecthr_label, .pred_class)
 ```
+
+
+#### Select best model and finalize the workflow
+
 
 ```{r eval=FALSE, include=FALSE}
-  autoplot(lasso_grid_tf) +
-  theme_minimal()
-  autoplot(lasso_grid_tfidf) +
-    theme_minimal()
+## pull the best model specification using cohen's kappa as the relevant metric
+models <- list("tf" = lasso_grid_tf, 
+                           "tfidf" = lasso_grid_tfidf, 
+                           "upsample" = lasso_grid_upsample)
+
+best_params <- map2_df(models, names(models),
+                      ~ show_best(.x, metric = "roc_auc") %>%
+                        mutate(model_type = .y))
+
+## slice the best parameters
+(final_model <- best_params %>%
+  arrange(desc(mean)) %>%
+  slice(1))
+
+## select the best workflow
+if (final_model$model_type[1] == "tf") {
   
-  lasso_grid_tf %>%
-  collect_metrics() %>%
-  mutate(bow = "tf") %>%
-  rbind(lasso_grid_tfidf %>% 
-          mutate(bow = "tfidf") %>%
-  collect_metrics()) %>%
-  ggplot(aes(penalty, mean, color = bow)) +
-  geom_line(linetype = "dashed") +
-  facet_wrap(~.metric) +
-  scale_x_log10() + 
-  theme_minimal() + 
-  guides(color = NULL)
+  final_lasso_wf <- finalize_workflow(
+  lasso_wf_tf,
+  final_model %>% select(penalty, .config)
+  )
+  
+} else if (final_model$model_type[1] == "tfidf") {
+  
+  final_lasso_wf <- finalize_workflow(
+  lasso_wf_tfidf,
+  final_model %>% select(penalty, .config)
+  )
+  
+} else {
+  
+  final_lasso_wf <- finalize_workflow(
+  lasso_wf_tf,
+  final_model %>% select(penalty, .config)
+  )
+  
+}
 
 ```
+
 
   
