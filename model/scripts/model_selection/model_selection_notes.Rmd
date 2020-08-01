@@ -62,7 +62,7 @@ Load the model dataset...
 ```{r}
 ## load the latest model dataset
 # keep features plus c
-model_data <- read_csv("../../data/model_data.csv.gz") %>%
+model_data <- read_csv("../data/model_data.csv.gz") %>%
   mutate(model_id = paste(case_id, article_id, sep = "_"),
          ecthr_label = as_factor(ecthr_label)) %>%
   select(ecthr_label, text, article_nchar, date_distance, cosine_similarity_tf, jaccard_distance, lang_og = source_lang_alpha2, contains("ner"), country_match_ratio, model_id) %>%
@@ -221,7 +221,11 @@ Starting with the text. Will create three recipes.
 tf_main <- recipe(ecthr_label ~ ., 
                   data = train_data) %>%
   update_role(model_id, new_role = "id variable") %>%
-  step_dummy(lang_og) %>%
+  step_dummy(lang_og) %>% 
+  step_mutate(date_distance = date_distance %>% 
+                str_replace("-", "minus_") %>% 
+                as_factor()) %>%
+  step_dummy(date_distance)
   step_log(article_nchar) %>%
   step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1, ngram_delim = "_")) %>%
   step_stem(text) %>%
@@ -249,7 +253,11 @@ tf_main
 tfidf_main <- recipe(ecthr_label ~ ., 
                   data = train_data) %>%
   update_role(model_id, new_role = "id variable") %>%
-  step_dummy(lang_og) %>%
+  step_dummy(lang_og) %>% 
+  step_mutate(date_distance = date_distance %>% 
+                str_replace("-", "minus_") %>% 
+                as_factor()) %>%
+  step_dummy(date_distance) %>%
   step_log(article_nchar) %>%
   step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1, ngram_delim = "_")) %>%
   step_stem(text) %>%
@@ -331,7 +339,7 @@ param_grid
 
 #### Prepare the workflow
 
-We will add ``step_normalize(all_predictors())``, i.e. normalize all predictors, as it is recommended
+We will add ``step_normalize(all_numeric())``, i.e. normalize all predictors, as it is recommended
 
 
 ```{r}
@@ -339,7 +347,7 @@ We will add ``step_normalize(all_predictors())``, i.e. normalize all predictors,
 lasso_wf_tf <- workflow() %>%
   add_recipe(
     tf_main %>% 
-      step_normalize(all_predictors(), -article_nchar) # since it is logged
+      step_normalize(all_numeric(), -article_nchar) # since it is logged
     ) %>%
   add_model(lasso_spec)
 
@@ -349,7 +357,7 @@ lasso_wf_tf
 lasso_wf_tfidf <- workflow() %>%
   add_recipe(
     tfidf_main %>% 
-      step_normalize(all_predictors(), -article_nchar) # since it is logged
+      step_normalize(all_numeric(), -article_nchar) # since it is logged
     ) %>%
   add_model(lasso_spec)
 
@@ -359,7 +367,7 @@ lasso_wf_tfidf
 # lasso_wf_upsample <- workflow() %>%
 #   add_recipe(
 #     tfidf_upsample %>% 
-#       step_normalize(all_predictors(), -article_nchar)
+#       step_normalize(all_numeric(), -article_nchar)
 #     ) %>%
 #   add_model(lasso_spec)
 # 
@@ -636,7 +644,7 @@ if (exists("tfidf_main")) {
 rf_base_wf <- workflow() %>%
   add_recipe(
     final_workflow %>% 
-      step_normalize(all_predictors(), -article_nchar) # since it is logged
+      step_normalize(all_numeric(), -article_nchar) # since it is logged
     ) %>%
   add_model(rf_base)
 
@@ -645,7 +653,7 @@ rf_base_wf
 rf_cs_wf <- workflow() %>%
   add_recipe(
     final_workflow %>% 
-      step_normalize(all_predictors(), -article_nchar) # since it is logged
+      step_normalize(all_numeric(), -article_nchar) # since it is logged
     ) %>%
   add_model(rf_cs)
 
