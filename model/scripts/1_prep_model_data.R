@@ -12,6 +12,9 @@ articles_data_path <- paste(parent_dir, "features", "data", "interm_data", "arti
 tf_path <- paste(parent_dir, "features", "data", "input", "tf_dtm", sep = "/")
 stringdist_path <- paste(parent_dir, "features", "data", "input", "stringdist", sep = "/")
 
+## Update the labels
+reticulate::source_python('/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/scripts/generate_text_features.py')
+
 #### String distance ---------------------------------------------------------------------
 ### load and concatenate the string distance data
 sd_list <- list.files(stringdist_path, full.names = TRUE) 
