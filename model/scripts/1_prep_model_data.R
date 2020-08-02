@@ -13,7 +13,13 @@ tf_path <- paste(parent_dir, "features", "data", "input", "tf_dtm", sep = "/")
 stringdist_path <- paste(parent_dir, "features", "data", "input", "stringdist", sep = "/")
 
 ## Update the labels
-reticulate::source_python('/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/scripts/generate_text_features.py')
+update_labels <- TRUE
+## source the python script
+if (update_labels) {
+  
+  reticulate::source_python('/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/scripts/generate_text_features.py')
+  
+}
 
 #### String distance ---------------------------------------------------------------------
 ### load and concatenate the string distance data
@@ -42,7 +48,7 @@ arts_data <- left_join(arts_all, to_fill) %>% ## fill in missing
                                   date_published), ## generate the other features
          date_published = ymd(date_published)) %>%
   mutate(article_nchar = nchar(text),
-         date_distance = as.integer(judgment_date - date_published)) %>%
+         date_distance = as.integer(date_published - judgment_date)) %>%
   select(ecthr_label, article_id, case_id, text, article_nchar, source_lang_alpha2, date_distance, date_published, judgment_date)
 
 #### NER variables -----------------------------------------------------------------------------------------
@@ -51,7 +57,7 @@ arts_data <- left_join(arts_all, to_fill) %>% ## fill in missing
 if (!file.exists(paste(parent_dir, "model", "data", "interm_data", "ner_data.csv.gz", sep = "/"))) {
   
 # initialize spacy
-spacyr::spacy_initialize()
+spacyr::spacy_initialize(python_executable = '/home/jmr/anaconda3/bin/python')
 ## turn text and id to a named vector
 docs <- arts_data$text %>%
   set_names(arts_data$article_id)
@@ -84,7 +90,6 @@ spacyr::spacy_finalize()
   
   just_ner <- read_csv(paste(parent_dir, "model", "data", "interm_data", "ner_data.csv.gz", sep = "/"))
   
-  
 }
 
 ### first batch of vars: NER counts normalized by number of words
@@ -94,7 +99,12 @@ ner_counts <- just_ner %>%
          entity = str_to_lower(entity)) %>%
   count(article_id, token_n, entity_n, entity) %>%
   mutate(entity_count_norm = n/token_n) %>%
-  pivot_wider(names_from = "entity", names_prefix = "ner_", values_from = "entity_count_norm", values_fill = 0) %>%
+  pivot_wider(
+    names_from = "entity", 
+    names_prefix = "ner_", 
+    values_from = "entity_count_norm", 
+    values_fill = 0
+    ) %>%
   select(-token_n, -entity_n) %>%
   distinct(article_id, .keep_all = TRUE)
 
@@ -136,12 +146,12 @@ model_data <- dataset_all %>%
   filter(!is.na(ecthr_label))
 ## export
 write_csv(model_data,
-          path = gzfile(paste(parent_dir, "model", "data", "model_data.csv.gz", sep = "/")))
+          path = gzfile(paste(parent_dir, "model", "scripts", "data", "model_data.csv.gz", sep = "/")))
 
 ### to_predict data
 to_predict_data <- dataset_all %>%
   anti_join(model_data)
 ## export
 write_csv(to_predict_data,
-          path = gzfile(paste(parent_dir, "model", "data", "to_predict_data.csv.gz", sep = "/")))
+          path = gzfile(paste(parent_dir, "model", "scripts", "data", "to_predict_data.csv.gz", sep = "/")))
 
