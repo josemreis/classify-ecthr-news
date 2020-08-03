@@ -461,11 +461,17 @@ final_model
 #### Variable importance
 
 ```{r}
-lasso_fit %>% 
+(p <-lasso_fit %>% 
   pluck(".workflow", 1) %>%   
   pull_workflow_fit() %>% 
   vip::vip(num_features = 40) + 
-  theme_minimal()
+  theme_minimal())
+
+ggsave(p, 
+       filename = "models/metrics/plots/rf_vip.png",
+       width = 8,
+       height = 6,
+       device = "png")
 ```
 
 #### Export the final model
@@ -480,8 +486,10 @@ write_rds(lasso_fit,
           path =  "models/lasso_workflow.Rds",
           compress = "gz")
 
-write_rds(pull_workflow_prepped_recipe(final_model),
-          path =  "models/lasso_prep_recipe.Rds",
+lasso_fit %>% 
+  pluck(".workflow", 1) %>%
+  pull_workflow_prepped_recipe() %>%
+  write_rds(path =  "models/rf_prep_recipe.Rds",
           compress = "gz")
 ```
 
@@ -562,7 +570,7 @@ system(paste("notify-send", "model tuned!", collapse = " "))
   
 ## plot the metrics
 ## plot the metrics
-(p1 <- autoplot(lasso_bayes_tune) +
+(p1 <- autoplot(rf_bayes_tune) +
     theme_minimal() + 
     ggtitle("tfidf-rf model"))
 
@@ -611,14 +619,15 @@ tresh_dataset <- map_df(seq(from = 0.1, to = 0.7, length.out = 100),
                           collect_predictions() %>%
                           mutate(preds2 = ifelse(.pred_1 > .x, 
                                                  "1", 
-                                                 "0") %>% as_factor()) %>%
-                          f_meas(truth = ecthr_label, estimate = preds2, event_level = "second") %>%
+                                                 "0") %>% as.factor()) %>%
+                          f_meas(truth = ecthr_label, estimate = preds2) %>%
                           mutate(prob_tresh = .x))
 
 (p <- tresh_dataset %>%
   ggplot(aes(prob_tresh, .estimate)) + 
   geom_point() + 
-  labs(y = "npv"))
+  labs(y = "f_meas") + 
+  theme_minimal())
 
 ggsave(p, 
        filename = "models/metrics/plots/rf_prob_tresh.png",
@@ -639,7 +648,7 @@ best_tresh <- tresh_dataset %>%
 ## pull the best model specification using roc_auc metric
 # select best model by f1
 final_model <- rf_bayes_tune %>%
-  select_best(metrif = "f_meas")
+  select_best(metric = "f_meas")
 
 ## finalize
 final_rf_wf <- finalize_workflow(
@@ -678,17 +687,25 @@ test_predictions <- rf_fit %>% collect_predictions()
 ## confusion matrix
 test_predictions %>%
   conf_mat(ecthr_label, .pred_class)
+
+
 ```
 
 
 #### Variable importance
 
 ```{r}
-rf_fit %>% 
+(p <-rf_fit %>% 
   pluck(".workflow", 1) %>%   
   pull_workflow_fit() %>% 
   vip::vip(num_features = 40) + 
-  theme_minimal()
+  theme_minimal())
+
+ggsave(p, 
+       filename = "models/metrics/plots/rf_vip.png",
+       width = 8,
+       height = 6,
+       device = "png")
 ```
 
 
@@ -715,7 +732,9 @@ write_rds(rf_fit,
           path =  "models/rf_workflow.Rds",
           compress = "gz")
 
-write_rds(pull_workflow_prepped_recipe(final_model),
-          path =  "models/rf_prep_recipe.Rds",
+rf_fit %>% 
+  pluck(".workflow", 1) %>%
+  pull_workflow_prepped_recipe() %>%
+  write_rds(path =  "models/rf_prep_recipe.Rds",
           compress = "gz")
 ```

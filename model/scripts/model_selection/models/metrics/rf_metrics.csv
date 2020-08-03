@@ -1,0 +1,9 @@
+.metric,.estimator,.estimate,model
+bal_accuracy,binary,0.7168527823579517,rf
+f_meas,binary,0.9724271844660195,rf
+ppv,binary,0.9571865443425076,rf
+npv,binary,0.75,rf
+recall,binary,0.9881610102604578,rf
+precision,binary,0.9571865443425076,rf
+kap,binary,0.5333256457564564,rf
+roc_auc,binary,0.9375190478795314,rf
