@@ -490,10 +490,6 @@ if __name__  == "__main__":
     rulart_dyad = prep.make_rulart_dyads(export_csv = True, load_latest = False).sample(frac = 1) # reshuffle
     ## if not, generate the features...
     if not just_label_update:
-        # add missing labels
-        new_arts = prep.load_articles()
-        # by left joining
-        target_dta = pd.merge(rulart_dyad, new_arts, how = "left")
         ## instantiate pre_process class
         proc = text_features.pre_process()
         for run in range(1, 20):

@@ -145,12 +145,12 @@ model_data <- dataset_all %>%
   filter(!is.na(ecthr_label))
 ## export
 write_csv(model_data,
-          path = gzfile(paste(parent_dir, "model", "scripts", "data", "model_data.csv.gz", sep = "/")))
+          path = gzfile(paste(parent_dir, "model", "data", "model_data.csv.gz", sep = "/")))
 
 ### to_predict data
 to_predict_data <- dataset_all %>%
   anti_join(model_data)
 ## export
 write_csv(to_predict_data,
-          path = gzfile(paste(parent_dir, "model", "scripts", "data", "to_predict_data.csv.gz", sep = "/")))
+          path = gzfile(paste(parent_dir, "model", "data", "to_predict_data.csv.gz", sep = "/")))
 

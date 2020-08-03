@@ -1,4 +1,6 @@
 *.html
 *.pdf
 model_selection_notes_cache
+model_selection_notes_files
 *.css
+.RDataTmp
