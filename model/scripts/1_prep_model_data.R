@@ -69,7 +69,6 @@ parsed <- spacy_parse(
   pos = FALSE, 
   multithread = TRUE
 )
-
 ## export
 just_ner <- parsed %>%
   rename(article_id = doc_id) %>%
