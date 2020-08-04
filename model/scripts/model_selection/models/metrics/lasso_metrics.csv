@@ -1,9 +1,9 @@
 .metric,.estimator,.estimate,model
-bal_accuracy,binary,0.7336774324630568,lasso
-f_meas,binary,0.9755529685681026,lasso
-ppv,binary,0.9595419847328245,lasso
-npv,binary,0.8275862068965524,lasso
-recall,binary,0.9921073401736386,lasso
-precision,binary,0.9595419847328245,lasso
-kap,binary,0.5812163501720152,lasso
-roc_auc,binary,0.9462595825486259,lasso
+bal_accuracy,binary,0.7389718530101642,lasso
+f_meas,binary,0.9649259547934529,lasso
+ppv,binary,0.9619269619269619,lasso
+npv,binary,0.5543478260869569,lasso
+recall,binary,0.9679437060203284,lasso
+precision,binary,0.9619269619269619,lasso
+kap,binary,0.4962413949863621,lasso
+roc_auc,binary,0.9144644253322909,lasso

@@ -177,12 +177,6 @@ model_data %>%
   ggplot(aes(ecthr_label, cosine_similarity_tf, fill = lang_og)) + 
   geom_boxplot() + 
   theme_minimal()
-
-model_data %>%
-  ggplot(aes(ecthr_label)) + 
-  geom_bar() + 
-  facet_wrap(~lang_og, "free_y") +
-  theme_minimal()
 ```
 
 # Modeling
@@ -326,13 +320,13 @@ if (!file.exists("models/lasso_model.Rds")) {
     lasso_wf,
     resamples = cv_samples,
     # Going with default range values for lambda
-    param_info = param_set(penalty()),
+    param_info = parameters(penalty()),
     # Generate five at semi-random to start
-    initial = 5,
+    initial = 25,
     iter = 50,
     # How to measure performance?
     metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap),
-    control = control_bayes(no_improve = 10, verbose = FALSE, save_pred = TRUE, save_workflow = TRUE, extract = function (x) extract_recipe(x), seed = 1234)
+    control = control_bayes(no_improve = 15, verbose = FALSE, save_pred = TRUE, seed = 1234)
   )
   
   # notify
@@ -378,7 +372,13 @@ if (!file.exists("models/lasso_model.Rds")) {
 
 } else {
   
-  knitr::include_graphics("models/metrics/plots/lasso_marginals.png")
+  readr::read_csv("models/metrics/lasso_metrics_tune.csv") %>%
+  ggplot(aes(x = penalty, y = mean, color = factor(.metric))) + 
+  geom_point() + 
+  geom_line() +
+  scale_x_log10() +
+  theme_minimal() + 
+  labs(x = "Penalty (log 10)")
   
 }
 ```
@@ -391,7 +391,7 @@ if (!file.exists("models/lasso_model.Rds")) {
   ## pull the best model specification using roc_auc metric
   # select best model by f1
   final_model <- lasso_bayes_tune %>%
-    select_best(metric = "f_meas")
+    select_best(metric = "bal_accuracy")
   
   ## finalize
   final_lasso_wf <- finalize_workflow(
@@ -466,10 +466,6 @@ if (!file.exists("models/lasso_model.Rds")) {
   final_model <- fit(final_lasso_wf, model_data)
   
   final_model
-
-} else {
-  
-  readr::read_rds("models/lasso_model.Rds")
   
 }
 ```
@@ -477,18 +473,34 @@ if (!file.exists("models/lasso_model.Rds")) {
 #### Variable importance
 
 
-```{r}
-(p <- readr::read_rds("models/lasso_model.Rds") %>%  
-  pull_workflow_fit() %>% 
-  vip::vip(num_features = 40) + 
-  theme_minimal())
+```{r eval=FALSE, include=TRUE}
+# 
+# if (!file.exists("models/lasso_model.Rds")) {
+#   
+#   (p <- lasso_fit %>%  
+#   pull_workflow_fit() %>% 
+#   vip::vip(num_features = 40) + 
+#   theme_minimal())
+# 
+#   ggsave(p, 
+#          filename = "models/metrics/plots/lasso_vip.png",
+#          width = 8,
+#          height = 6,
+#          device = "png")
+# 
+# } else {
+#   
+#   (p <- readr::read_rds("models/lasso_model.Rds") %>%  
+#   pull_workflow_fit() %>% 
+#   vip::vip(num_features = 40) + 
+#   theme_minimal())
+# 
+# }
 
-ggsave(p, 
-       filename = "models/metrics/plots/rf_vip.png",
-       width = 8,
-       height = 6,
-       device = "png")
+
+knitr::include_graphics("models/metrics/plots/lasso_vip.png")
 ```
+ 
 
 
 #### Export the final model
@@ -509,7 +521,7 @@ if (!file.exists("models/lasso_model.Rds")) {
   lasso_fit %>% 
     pluck(".workflow", 1) %>%
     pull_workflow_prepped_recipe() %>%
-    write_rds(path =  "models/rf_prep_recipe.Rds",
+    write_rds(path =  "models/lasso_prep_recipe.Rds",
             compress = "gz")
 
 }
@@ -526,8 +538,8 @@ Next, a random forests models following ``ranger``'s implementation. Will deal w
 ### Cost-sensitive random forests
 rf_cs <- rand_forest(
   mtry = tune(),
-  min_n = tune(),
-  trees = 1000, # number of randomly samped predictor in each split when creating the trees
+  min_n = 1,
+  trees = 2000, # number of randomly samped predictor in each split when creating the trees
 ) %>%
   set_mode("classification") %>%
   set_engine(
@@ -535,7 +547,6 @@ rf_cs <- rand_forest(
     seed = 1234,
     num.threads = 4,
     importance = "impurity",
-    keep_inbag = TRUE,
     sample.fraction = c(.5, .5)
   )
 ```
@@ -568,17 +579,18 @@ if (!file.exists("models/rf_model.Rds")) {
   doParallel::registerDoParallel()
   set.seed(1234)
   rf_bayes_tune <- tune_bayes(
-    rf_cs_wf,
-    resamples = cv_samples,
-    # To use non-default parameter ranges
-    param_info = param_set(mtry(range(56, 400)), min_n(range(1, 5))),
-    # Generate five at semi-random to start
-    initial = 5,
-    iter = 50,
-    # How to measure performance?
-    metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap),
-    control = control_bayes(no_improve = 10, verbose = FALSE, save_pred = TRUE, save_workflow = TRUE, seed = 1234)
-  )
+  rf_cs_wf,
+  resamples = cv_samples,
+  # To use non-default parameter ranges
+  param_info = parameters(mtry(range(56, 400))),
+  # Generate five at semi-random to start
+  initial = 5,
+  iter = 50,
+  # How to measure performance?
+  metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap),
+  control = control_bayes(no_improve = 15, verbose = FALSE, save_pred = TRUE, seed = 1234)
+)
+
   
   # notify
   system(paste("notify-send", "model tuned!", collapse = " "))
@@ -625,12 +637,12 @@ if (!file.exists("models/rf_model.Rds")) {
   
   ## logging because numbers are almost undistinguishable otherwise
   readr::read_csv("models/metrics/rf_metrics_tune.csv") %>%
-    ggplot(aes(x = mtry, y = mean, color = factor(min_n))) + 
+    ggplot(aes(x = mtry, y = mean, color = factor(.metric), shape = factor(min_n))) + 
     geom_point() + 
     geom_line() +
     theme_minimal() + 
-    labs(color = "min_n") +
-    facet_wrap(~.metric, scales = "free", ncol = 1) 
+    labs(color = "metric",
+         shape = "min_n")
   
 }
 ```
@@ -686,7 +698,7 @@ if (!file.exists("models/rf_model.Rds")) {
   ## pull the best model specification using roc_auc metric
   # select best model by f1
   final_model <- rf_bayes_tune %>%
-    select_best(metric = "f_meas")
+    select_best(metric = "bal_accuracy")
   
   ## finalize
   final_rf_wf <- finalize_workflow(
@@ -763,14 +775,275 @@ if (!file.exists("models/rf_model.Rds")) {
 #### Variable importance
 
 ```{r}
-(p <-rf_fit %>% 
+
+# if (!file.exists("models/rf_model.Rds")) {
+#   
+#    (p <- final_model %>%  
+#   pull_workflow_fit() %>% 
+#   vip::vip(num_features = 40) + 
+#   theme_minimal())
+# 
+#   ggsave(p, 
+#          filename = "models/metrics/plots/rf_vip.png",
+#          width = 8,
+#          height = 6,
+#          device = "png")
+# 
+# } else {
+#   
+#   (p <- readr::read_rds("models/rf_model.Rds") %>%  
+#   pull_workflow_fit() %>% 
+#   vip::vip(num_features = 40) + 
+#   theme_minimal())
+# 
+# }
+knitr::include_graphics("models/metrics/plots/rf_vip.png")
+```
+
+
+#### Fitting the final model
+
+Fit the final model on the entire trained dataset.
+
+```{r}
+
+if (!file.exists("models/rf_model.Rds")) {
+  
+  final_model <- fit(final_rf_wf, model_data)
+  
+  final_model
+
+}
+```
+
+
+#### Export the final model
+
+```{r}
+
+if (!file.exists("models/rf_model.Rds")) {
+  
+  write_rds(final_model,
+            path =  "models/rf_model.Rds",
+            compress = "gz")
+  
+  write_rds(rf_fit,
+            path =  "models/rf_workflow.Rds",
+            compress = "gz")
+  
+  rf_fit %>% 
+    pluck(".workflow", 1) %>%
+    pull_workflow_prepped_recipe() %>%
+    write_rds(path =  "models/rf_prep_recipe.Rds",
+            compress = "gz")
+
+}
+```
+
+
+
+### (RBF) SVM
+
+#### Models
+
+Next, radial basis function support vector machines. We expect an improvement since one of the properties of SVM models comes at hand for us: robustness to outliers (see plots above).
+
+
+```{r}
+### radial basis function support vector machines
+svm_rbf <- svm_rbf(
+  cost = tune(),
+  rbf_sigma = tune()
+) %>%
+  set_mode("classification") %>%
+  set_engine(engine = "kernlab")
+```
+
+
+#### Prepare the workflows
+
+```{r}
+## Prep the workflow
+svm_wf <- workflow() %>%
+  add_recipe(tfidf_main)%>%
+  add_model(svm_rbf)
+
+svm_wf
+```
+
+
+#### Training and tunning the model
+
+...write up later
+  
+
+```{r}
+
+if (!file.exists("models/svmrbf_model.Rds")) {
+  
+  doParallel::registerDoParallel()
+  set.seed(1234)
+  svmrbf_bayes_tune <- tune_bayes(
+    svm_wf,
+    resamples = cv_samples,
+    # Generate five at semi-random to start
+    initial = 25,
+    iter = 50,
+    # How to measure performance?
+    metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap),
+    control = control_bayes(no_improve = 15, verbose = FALSE, save_pred = TRUE, seed = 1234)
+  )
+  
+  # notify
+  system(paste("notify-send", "model tuned!", collapse = " "))
+    
+  ## plot the metrics
+  (p1 <- autoplot(svmrbf_bayes_tune) +
+      theme_minimal() + 
+      ggtitle("tfidf-svm-rbf model"))
+  
+  ggsave(p1, 
+         filename = "models/metrics/plots/svmrbf_marginals.png",
+         width = 8,
+         height = 6,
+         device = "png")
+  
+  (p2 <- autoplot(svmrbf_bayes_tune, type = "parameters") +
+      theme_minimal() + 
+      ggtitle("tfidf-svm-rbf model"))
+  
+  ggsave(p2, 
+         filename = "models/metrics/plots/svmrbf_parameters.png",
+         width = 8,
+         height = 6,
+         device = "png")
+  
+  (p3 <- autoplot(svmrbf_bayes_tune, type = "performance") +
+      theme_minimal() + 
+      ggtitle("tfidf-svm-rbf model"))
+  
+  ggsave(p3, 
+         filename = "models/metrics/plots/svmrbf_performance.png",
+         width = 8,
+         height = 6,
+         device = "png")
+  
+  ### export metrics
+  svmrbf_bayes_tune %>%
+    collect_metrics() %>%
+    mutate(model = "rf") %>%
+    write_csv(path = "models/metrics/svmrbf_metrics_tune.csv")
+
+} else {
+  
+  ## logging because numbers are almost undistinguishable otherwise
+  readr::read_csv("models/metrics/svmrbf_metrics_tune.csv") %>%
+    ggplot(aes(x = mtry, y = mean, color = factor(.metric), shape = factor(min_n))) + 
+    geom_point() + 
+    geom_line() +
+    theme_minimal() + 
+    labs(color = "metric",
+         shape = "min_n")
+  
+}
+```
+
+
+#### Select best model and finalize the workflow
+
+
+```{r}
+
+if (!file.exists("models/svmrbf_model.Rds")) {
+  
+  ## pull the best model specification using roc_auc metric
+  # select best model by f1
+  final_model <- svmrbf_bayes_tune %>%
+    select_best(metric = "bal_accuracy")
+  
+  ## finalize
+  final_svmrbf_wf <- finalize_workflow(
+    svm_wf,
+    final_model
+  )
+  
+  final_svmrbf_wf
+
+} else {
+  
+  readr::read_rds("models/svmrbf_workflow.Rds") %>% 
+  pluck(".workflow", 1)
+  
+}
+```
+
+
+#### Evaluate on the test-set
+
+```{r}
+if (!file.exists("models/svmrbf_model.Rds")) {
+
+  svmrbf_fit <- final_svmrbf_wf %>%
+  last_fit(the_split, metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap))
+  
+}
+```
+
+
+```{r}
+
+if (!file.exists("models/svmrbf_model.Rds")) {
+  
+  ### evaluate with metrics
+  test_performance <- svmrbf_fit %>% collect_metrics()
+  test_performance
+  
+  # export
+  test_performance %>%
+    mutate(model = "rf") %>%
+    write_csv(path = "models/metrics/svmrbf_metrics.csv")
+
+} else {
+  
+  readr::read_csv("models/metrics/svmrbf_metrics.csv")
+  
+}
+```
+
+
+```{r}
+
+if (!file.exists("models/svmrbf_model.Rds")) {
+  
+  # generate predictions from the test set
+  test_predictions <- svmrbf_fit %>% collect_predictions()
+  
+  ## confusion matrix
+  test_predictions %>%
+    conf_mat(ecthr_label, .pred_class)
+
+} else {
+  
+  readr::read_rds("models/svmrbf_workflow.Rds") %>% 
+    collect_predictions() %>%
+    conf_mat(ecthr_label, .pred_class)
+  
+}
+
+```
+
+
+#### Variable importance
+
+```{r}
+(p <-svmrbf_fit %>% 
   pluck(".workflow", 1) %>%   
   pull_workflow_fit() %>% 
   vip::vip(num_features = 40) + 
   theme_minimal())
 
 ggsave(p, 
-       filename = "models/metrics/plots/rf_vip.png",
+       filename = "models/metrics/plots/svmrbf_vip.png",
        width = 8,
        height = 6,
        device = "png")
@@ -782,9 +1055,14 @@ ggsave(p,
 Fit the final model on the entire trained dataset.
 
 ```{r}
-final_model <- fit(final_rf_wf, model_data)
 
-final_model
+if (!file.exists("models/svmrbf_model.Rds")) {
+  
+  final_model <- fit(final_svmrbf_wf, model_data)
+  
+  final_model
+
+}
 ```
 
 
@@ -792,17 +1070,21 @@ final_model
 
 ```{r}
 
-write_rds(final_model,
-          path =  "models/rf_model.Rds",
-          compress = "gz")
+if (!file.exists("models/svmrbf_model.Rds")) {
+  
+  write_rds(final_model,
+            path =  "models/svmrbf_model.Rds",
+            compress = "gz")
+  
+  write_rds(svmrbf_fit,
+            path =  "models/svmrbf_workflow.Rds",
+            compress = "gz")
+  
+  svmrbf_fit %>% 
+    pluck(".workflow", 1) %>%
+    pull_workflow_prepped_recipe() %>%
+    write_rds(path =  "models/svmrbf_prep_recipe.Rds",
+            compress = "gz")
 
-write_rds(rf_fit,
-          path =  "models/rf_workflow.Rds",
-          compress = "gz")
-
-rf_fit %>% 
-  pluck(".workflow", 1) %>%
-  pull_workflow_prepped_recipe() %>%
-  write_rds(path =  "models/rf_prep_recipe.Rds",
-          compress = "gz")
+}
 ```
