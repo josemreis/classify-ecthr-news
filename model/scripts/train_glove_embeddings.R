@@ -34,7 +34,7 @@ readr::write_csv(embeddings,
                  path = gzfile('/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/model/data/interm_data/glove_tidy.csv.gz'))
 
 readr::write_rds(wv, 
-                 path = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/model/data/interm_data/glove_raw.csv.gz',
+                 path = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/model/data/interm_data/glove_raw.rds.gz',
                  compress = "gz")
 
 ### testing it
