@@ -21,11 +21,12 @@ link-citations: yes
 require(knitr)
 ## Global options
 options(max.print="75")
-opts_chunk$set(cache=TRUE,
+opts_chunk$set(cache=FALSE,
                prompt=FALSE,
                comment=NA,
                message=FALSE,
-               warning=FALSE)
+               warning=FALSE,
+               cache.lazy = FALSE)
 opts_knit$set(width=75)
 ```
 
@@ -77,6 +78,8 @@ model_data <- read_csv("../../data/model_data.csv.gz") %>%
   mutate(model_id = paste(case_id, article_id, sep = "_"),
          ecthr_label = as_factor(ecthr_label)) %>%
   select(ecthr_label, text, article_nchar, date_distance, cosine_similarity_tf, jaccard_distance, lang_og = source_lang_alpha2, contains("ner"), country_match_ratio, model_id) %>%
+  filter(article_nchar > 500) %>%
+  distinct(text, .keep_all = TRUE) %>%
   drop_na()
 glimpse(model_data)
 ```
@@ -89,7 +92,9 @@ These features will be generated below...
   1. We took each article and translated it to english using google translate [(unoffical) api](https://pypi.org/project/googletrans/).
   2. Next, we tokenize the text into ngrams from 1-4.
   3. As for pre-processing, will keep it simple. Only remove stop-words and punctuation. Practices such as stemming or lemmatization might be problematic in our context since, for example, verb conjugations are expected to be relatively relavant for identifying whether, say, the ruling mentioned is the actual one or parallel one close by.
-    
+   
+**add the glove embeddings description!**
+
 ## Ruling-article document similarity (original language or english translations)
 
 The main idea is that the two documents, ruling and article, being close in their language should be indicative of whether the article covers it. String comparisons where done by comparing both as *document term matrices* where each is represented as a term-frequency normalized by document lenght (unique words) vector. 
@@ -229,38 +234,33 @@ Going with td-idf as it performed better than tf BoWs.
 
 Pre-processing recipe:
 
-  - tf-idf vectors (1-3 ngrams)
-  - no stopwords
-  - stemmed
-  - tf > 2, max top-words 1000
-  - main sampling
-  - number of character natural logged
-  - date distance discretized and turned into dummies
-  - random sample
+  - pre-trained glove embeddings (50 dim) for feature reduction; more details above, also [see](http://www.aclweb.org/anthology/D14-1162)
+  - number of character natural logged;
+  - date distance discretized and turned into dummies;
+  - SMOTE oversampling for tackling class imbalance and poor data, synctatic minority data (https://arxiv.org/pdf/1106.1813.pdf). Neighbors (k) tuneable.
 
 ```{r}
-tfidf_main <- recipe(ecthr_label ~ ., 
-                  data = train_data) %>%
-  update_role(model_id, new_role = "id variable") %>%
-  step_rm(lang_og) %>% ## remove the language variable (see above)
-  step_mutate( ## discretize the date distance variable
-    date_distance = date_distance %>% 
-      str_replace("-", "minus_") %>% 
-      as_factor()
+## load the pre-trained embeddings
+embeddings <- textdata::embedding_glove6b(dimensions = 50)
+
+glove_main <- recipe(
+    ecthr_label ~ .,
+    data = train_data,
+  ) %>%
+    update_role(model_id, new_role = "id variable") %>% ## removing several variables which reduced/neutral_to performance
+    step_rm(c(lang_og, model_id, jaccard_distance, country_match_ratio, contains("ner"))) %>% ## remove the language variable (see above)
+    step_mutate(## discretize the date distance variable
+      date_distance = date_distance %>% str_replace("-", "minus_") %>% as_factor()
     ) %>%
-  step_dummy(date_distance) %>%
-  step_log(article_nchar) %>% # natural log of artice nchar
-  step_tokenize(text) %>% ## remove stopwords
-  step_stopwords(text, keep = FALSE, stopword_source = "stopwords-iso") %>%
-  step_stem(text) %>% ## turn to ngram
-  step_untokenize(text) %>% 
-  step_tokenize(text, token = "ngrams", options = list(n = 3, n_min = 1, ngram_delim = "_")) %>% 
-  step_tokenfilter(text, min_times = 2, max_tokens = 1000) %>%
-  step_normalize(all_numeric(), -article_nchar, -all_outcomes()) %>%
-  step_zv(all_predictors()) %>% # remove 0 variance vars %>%
-  step_tfidf(text)## the recipe
+    step_dummy(date_distance) %>% ## date as dummy
+    step_log(article_nchar) %>% ## log numbe rof characets
+    step_tokenize(text) %>% ## tokenize and vectorize
+    step_word_embeddings(text, embeddings = embeddings) %>%
+    step_zv(all_predictors()) %>% # remove variables with zero variance
+    step_normalize(all_numeric(), -article_nchar, -all_outcomes()) %>% ## center and scale
+  step_smote(ecthr_label, neighbors = 30) ## smote sampling, k = 30
   
-tfidf_main
+glove_main
 ```
 
 ## Bulding the models
@@ -297,7 +297,7 @@ We will add ``step_normalize(all_numeric())``, i.e. normalize all predictors, as
 ```{r}
 ## Prep the workflow: TFIDF
 lasso_wf <- workflow() %>%
-  add_recipe(tfidf_main) %>%
+  add_recipe(glove_main) %>%
   add_model(lasso_spec)
 
 lasso_wf
@@ -306,11 +306,10 @@ lasso_wf
 
 #### Training and tunning the model
 
-
 Tunning the model with Bayesian model-based optimization [see](https://towardsdatascience.com/a-conceptual-explanation-of-bayesian-model-based-hyperparameter-optimization-for-machine-learning-b8172278050f). 
 
 ```{r}
-if (!file.exists("models/lasso_model.Rds")) {
+if (!file.exists("models/glove-lasso_model.Rds")) {
   ## parallel
   # Sequential tuning, yet For "Bayesian optimization, parallel processing is used to estimate the resampled performance values once a new candidate set of values are estimated."
   doParallel::registerDoParallel()
@@ -325,7 +324,7 @@ if (!file.exists("models/lasso_model.Rds")) {
     initial = 25,
     iter = 50,
     # How to measure performance?
-    metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap),
+    metrics = metric_set(kap, roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision),
     control = control_bayes(no_improve = 15, verbose = FALSE, save_pred = TRUE, seed = 1234)
   )
   
@@ -336,30 +335,30 @@ if (!file.exists("models/lasso_model.Rds")) {
   ## plot the metrics
   (p1 <- autoplot(lasso_bayes_tune) +
       theme_minimal() + 
-      ggtitle("tfidf-lasso model"))
+      ggtitle("glove-lasso model"))
   
   ggsave(p1, 
-         filename = "models/metrics/plots/lasso_marginals.png",
+         filename = "models/metrics/plots/glove-lasso_marginals.png",
          width = 8,
          height = 6,
          device = "png")
   
   (p2 <- autoplot(lasso_bayes_tune, type = "parameters") +
       theme_minimal() + 
-      ggtitle("tfidf-lasso model"))
+      ggtitle("glove-lasso model"))
   
   ggsave(p2, 
-         filename = "models/metrics/plots/lasso_parameters.png",
+         filename = "models/metrics/plots/glove-lasso_parameters.png",
          width = 8,
          height = 6,
          device = "png")
   
   (p3 <- autoplot(lasso_bayes_tune, type = "performance") +
       theme_minimal() + 
-      ggtitle("tfidf-lasso model"))
+      ggtitle("glove-lasso model"))
   
   ggsave(p3, 
-         filename = "models/metrics/plots/lasso_performance.png",
+         filename = "models/metrics/plots/glove-lasso_performance.png",
          width = 8,
          height = 6,
          device = "png")
@@ -367,12 +366,12 @@ if (!file.exists("models/lasso_model.Rds")) {
   ### export metrics
   lasso_bayes_tune %>%
     collect_metrics() %>%
-    mutate(model = "lasso") %>%
-    write_csv(path = "models/metrics/lasso_metrics_tune.csv")
+    mutate(model = "lasso-glove") %>%
+    write_csv(path = "models/metrics/glove-lasso_metrics_tune.csv")
 
 } else {
   
-  readr::read_csv("models/metrics/lasso_metrics_tune.csv") %>%
+  readr::read_csv("models/metrics/glove-lasso_metrics_tune.csv") %>%
   ggplot(aes(x = penalty, y = mean, color = factor(.metric))) + 
   geom_point() + 
   geom_line() +
@@ -386,10 +385,10 @@ if (!file.exists("models/lasso_model.Rds")) {
 
 #### Select best model and finalize the workflow
 
+
 ```{r}
-if (!file.exists("models/lasso_model.Rds")) {
-  ## pull the best model specification using roc_auc metric
-  # select best model by f1
+if (!file.exists("models/glove-lasso_model.Rds")) {
+  # select best model by balanced accuracy
   final_model <- lasso_bayes_tune %>%
     select_best(metric = "bal_accuracy")
   
@@ -401,7 +400,7 @@ if (!file.exists("models/lasso_model.Rds")) {
   
 } else {
   
-  readr::read_rds("models/lasso_workflow.Rds") %>%
+  readr::read_rds("models/glove-lasso_workflow.Rds") %>%
     pluck(".workflow", 1)
   
 }
@@ -412,7 +411,7 @@ if (!file.exists("models/lasso_model.Rds")) {
 
 
 ```{r}
-if (!file.exists("models/lasso_model.Rds")) {
+if (!file.exists("models/glove-lasso_model.Rds")) {
   
   lasso_fit <- final_lasso_wf %>%
     last_fit(the_split, metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap))
@@ -423,19 +422,20 @@ if (!file.exists("models/lasso_model.Rds")) {
   
   # export
   test_performance %>%
-    mutate(model = "lasso") %>%
-    write_csv(path = "models/metrics/lasso_metrics.csv")
+    mutate(model = "lasso-glove") %>%
+    write_csv(path = "models/metrics/glove-lasso_metrics.csv")
   
 } else {
   
-  readr::read_csv("models/metrics/lasso_metrics.csv")
+  readr::read_csv("models/metrics/glove-lasso_metrics.csv")
   
 }
 ```
 
 
+
 ```{r}
-if (!file.exists("models/lasso_model.Rds")) {
+if (!file.exists("models/glove-lasso_model.Rds")) {
     
   # generate predictions from the test set
   test_predictions <- lasso_fit %>% collect_predictions()
@@ -446,7 +446,7 @@ if (!file.exists("models/lasso_model.Rds")) {
 
 } else {
   
-  readr::read_rds("models/lasso_workflow.Rds") %>% 
+  readr::read_rds("models/glove-lasso_workflow.Rds") %>% 
     collect_predictions() %>%
     conf_mat(ecthr_label, .pred_class)
     
@@ -461,7 +461,7 @@ Fit the final model on the entire trained dataset.
 
 ```{r}
 
-if (!file.exists("models/lasso_model.Rds")) {
+if (!file.exists("models/glove-lasso_model.Rds")) {
   
   final_model <- fit(final_lasso_wf, model_data)
   
@@ -470,12 +470,13 @@ if (!file.exists("models/lasso_model.Rds")) {
 }
 ```
 
+
 #### Variable importance
 
 
 ```{r eval=FALSE, include=TRUE}
 # 
-# if (!file.exists("models/lasso_model.Rds")) {
+# if (!file.exists("models/glove-lasso_model.Rds")) {
 #   
 #   (p <- lasso_fit %>%  
 #   pull_workflow_fit() %>% 
@@ -490,7 +491,7 @@ if (!file.exists("models/lasso_model.Rds")) {
 # 
 # } else {
 #   
-#   (p <- readr::read_rds("models/lasso_model.Rds") %>%  
+#   (p <- readr::read_rds("models/glove-lasso_model.Rds") %>%  
 #   pull_workflow_fit() %>% 
 #   vip::vip(num_features = 40) + 
 #   theme_minimal())
@@ -498,7 +499,7 @@ if (!file.exists("models/lasso_model.Rds")) {
 # }
 
 
-knitr::include_graphics("models/metrics/plots/lasso_vip.png")
+# knitr::include_graphics("models/metrics/plots/lasso_vip.png")
 ```
  
 
@@ -508,20 +509,20 @@ knitr::include_graphics("models/metrics/plots/lasso_vip.png")
 
 ```{r}
 
-if (!file.exists("models/lasso_model.Rds")) {
+if (!file.exists("models/glove-lasso_model.Rds")) {
   
   write_rds(final_model,
-            path =  "models/lasso_model.Rds",
+            path =  "models/glove-lasso_model.Rds",
             compress = "gz")
   
   write_rds(lasso_fit,
-            path =  "models/lasso_workflow.Rds",
+            path =  "models/glove-lasso_workflow.Rds",
             compress = "gz")
   
   lasso_fit %>% 
     pluck(".workflow", 1) %>%
     pull_workflow_prepped_recipe() %>%
-    write_rds(path =  "models/lasso_prep_recipe.Rds",
+    write_rds(path =  "models/glove-lasso_prep_recipe.Rds",
             compress = "gz")
 
 }
@@ -539,7 +540,7 @@ Next, a random forests models following ``ranger``'s implementation. Will deal w
 rf_cs <- rand_forest(
   mtry = tune(),
   min_n = 1,
-  trees = 2000, # number of randomly samped predictor in each split when creating the trees
+  trees = 500
 ) %>%
   set_mode("classification") %>%
   set_engine(
@@ -558,7 +559,7 @@ rf_cs <- rand_forest(
 ```{r}
 ## Prep the workflow
 rf_cs_wf <- workflow() %>%
-  add_recipe(tfidf_main)%>%
+  add_recipe(glove_main)%>%
   add_model(rf_cs)
 
 rf_cs_wf
@@ -574,24 +575,25 @@ Tunable hyperparameters^[[see](https://arxiv.org/pdf/1804.03515.pdf)]:
 
 ```{r}
 
-if (!file.exists("models/rf_model.Rds")) {
+if (!file.exists("models/rf-glove_model.Rds")) {
   
   doParallel::registerDoParallel()
   set.seed(1234)
   rf_bayes_tune <- tune_bayes(
-  rf_cs_wf,
-  resamples = cv_samples,
-  # To use non-default parameter ranges
-  param_info = parameters(mtry(range(56, 400))),
-  # Generate five at semi-random to start
-  initial = 5,
-  iter = 50,
-  # How to measure performance?
-  metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap),
-  control = control_bayes(no_improve = 15, verbose = FALSE, save_pred = TRUE, seed = 1234)
+    rf_cs_wf,
+    resamples = cv_samples,
+    # To use non-default parameter ranges
+    param_info = parameters(
+      mtry() %>% range_set(c(8, 60))
+      ),
+    # Generate five at semi-random to start
+    initial = 25,
+    iter = 50,
+    # How to measure performance? Select bbest based on cohens kappa
+    metrics = metric_set(kap, roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision),
+    control = control_bayes(no_improve = 15, verbose = FALSE, save_pred = TRUE, seed = 1234)
 )
 
-  
   # notify
   system(paste("notify-send", "model tuned!", collapse = " "))
     
@@ -599,30 +601,30 @@ if (!file.exists("models/rf_model.Rds")) {
   ## plot the metrics
   (p1 <- autoplot(rf_bayes_tune) +
       theme_minimal() + 
-      ggtitle("tfidf-rf model"))
+      ggtitle("glove-rf model"))
   
   ggsave(p1, 
-         filename = "models/metrics/plots/rf_marginals.png",
+         filename = "models/metrics/plots/rf-glove_marginals.png",
          width = 8,
          height = 6,
          device = "png")
   
   (p2 <- autoplot(rf_bayes_tune, type = "parameters") +
       theme_minimal() + 
-      ggtitle("tfidf-rf model"))
+      ggtitle("glove-rf model"))
   
   ggsave(p2, 
-         filename = "models/metrics/plots/rf_parameters.png",
+         filename = "models/metrics/plots/rf-glove_parameters.png",
          width = 8,
          height = 6,
          device = "png")
   
   (p3 <- autoplot(rf_bayes_tune, type = "performance") +
       theme_minimal() + 
-      ggtitle("tfidf-rf model"))
+      ggtitle("glove-rf model"))
   
   ggsave(p3, 
-         filename = "models/metrics/plots/rf_performance.png",
+         filename = "models/metrics/plots/rf-glove_performance.png",
          width = 8,
          height = 6,
          device = "png")
@@ -630,14 +632,14 @@ if (!file.exists("models/rf_model.Rds")) {
   ### export metrics
   rf_bayes_tune %>%
     collect_metrics() %>%
-    mutate(model = "rf") %>%
-    write_csv(path = "models/metrics/rf_metrics_tune.csv")
+    mutate(model = "rf-glove") %>%
+    write_csv(path = "models/metrics/rf-glove_metrics_tune.csv")
 
 } else {
   
   ## logging because numbers are almost undistinguishable otherwise
-  readr::read_csv("models/metrics/rf_metrics_tune.csv") %>%
-    ggplot(aes(x = mtry, y = mean, color = factor(.metric), shape = factor(min_n))) + 
+  readr::read_csv("models/metrics/rf-glove_metrics_tune.csv") %>%
+    ggplot(aes(x = mtry, y = mean, color = factor(.metric))) + 
     geom_point() + 
     geom_line() +
     theme_minimal() + 
@@ -648,55 +650,15 @@ if (!file.exists("models/rf_model.Rds")) {
 ```
 
 
-#### Probability treshholds
-
-Find the probability treshhold which maximizes f score.
-
-```{r}
-if (!file.exists("models/rf_model.Rds")) {
-  
-tresh_dataset <- map_df(seq(from = 0.1, to = 0.7, length.out = 100),
-                        ~ rf_bayes_tune %>%
-                          collect_predictions() %>%
-                          mutate(preds2 = ifelse(.pred_1 > .x, 
-                                                 "1", 
-                                                 "0") %>% as.factor()) %>%
-                          bal_accuracy(truth = ecthr_label, estimate = preds2) %>%
-                          mutate(prob_tresh = .x))
-
-(p <- tresh_dataset %>%
-  ggplot(aes(prob_tresh, .estimate)) + 
-  geom_point() + 
-  labs(y = "balanced_accuracy") + 
-  theme_minimal())
-
-ggsave(p, 
-       filename = "models/metrics/plots/rf_prob_tresh.png",
-       width = 8,
-       height = 6,
-       device = "png")
-
-(best_tresh <- tresh_dataset %>%
-  filter(.estimate == max(.estimate)) %>%
-  pull("prob_tresh"))
-
-} else {
-  
-  knitr::include_graphics("models/metrics/plots/rf_prob_tresh.png")
-  
-}
-```
-
-
 #### Select best model and finalize the workflow
 
 
 ```{r}
 
-if (!file.exists("models/rf_model.Rds")) {
+if (!file.exists("models/rf-glove_model.Rds")) {
   
   ## pull the best model specification using roc_auc metric
-  # select best model by f1
+  # select best model by balanced accuracy
   final_model <- rf_bayes_tune %>%
     select_best(metric = "bal_accuracy")
   
@@ -710,7 +672,7 @@ if (!file.exists("models/rf_model.Rds")) {
 
 } else {
   
-  readr::read_rds("models/rf_workflow.Rds") %>% 
+  readr::read_rds("models/rf-glove_workflow.Rds") %>% 
   pluck(".workflow", 1)
   
 }
@@ -720,7 +682,7 @@ if (!file.exists("models/rf_model.Rds")) {
 #### Evaluate on the test-set
 
 ```{r}
-if (!file.exists("models/rf_model.Rds")) {
+if (!file.exists("models/rf-glove_model.Rds")) {
 
   rf_fit <- final_rf_wf %>%
   last_fit(the_split, metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap))
@@ -731,7 +693,7 @@ if (!file.exists("models/rf_model.Rds")) {
 
 ```{r}
 
-if (!file.exists("models/rf_model.Rds")) {
+if (!file.exists("models/rf-glove_model.Rds")) {
   
   ### evaluate with metrics
   test_performance <- rf_fit %>% collect_metrics()
@@ -739,12 +701,12 @@ if (!file.exists("models/rf_model.Rds")) {
   
   # export
   test_performance %>%
-    mutate(model = "rf") %>%
-    write_csv(path = "models/metrics/rf_metrics.csv")
+    mutate(model = "rf-glove") %>%
+    write_csv(path = "models/metrics/rf-glove_metrics.csv")
 
 } else {
   
-  readr::read_csv("models/metrics/rf_metrics.csv")
+  readr::read_csv("models/metrics/rf-glove_metrics.csv")
   
 }
 ```
@@ -752,7 +714,7 @@ if (!file.exists("models/rf_model.Rds")) {
 
 ```{r}
 
-if (!file.exists("models/rf_model.Rds")) {
+if (!file.exists("models/rf-glove_model.Rds")) {
   
   # generate predictions from the test set
   test_predictions <- rf_fit %>% collect_predictions()
@@ -763,7 +725,7 @@ if (!file.exists("models/rf_model.Rds")) {
 
 } else {
   
-  readr::read_rds("models/rf_workflow.Rds") %>% 
+  readr::read_rds("models/rf-glove_workflow.Rds") %>% 
     collect_predictions() %>%
     conf_mat(ecthr_label, .pred_class)
   
@@ -776,7 +738,7 @@ if (!file.exists("models/rf_model.Rds")) {
 
 ```{r}
 
-# if (!file.exists("models/rf_model.Rds")) {
+# if (!file.exists("models/rf-glove_model.Rds")) {
 #   
 #    (p <- final_model %>%  
 #   pull_workflow_fit() %>% 
@@ -791,13 +753,13 @@ if (!file.exists("models/rf_model.Rds")) {
 # 
 # } else {
 #   
-#   (p <- readr::read_rds("models/rf_model.Rds") %>%  
+#   (p <- readr::read_rds("models/rf-glove_model.Rds") %>%  
 #   pull_workflow_fit() %>% 
 #   vip::vip(num_features = 40) + 
 #   theme_minimal())
 # 
 # }
-knitr::include_graphics("models/metrics/plots/rf_vip.png")
+# knitr::include_graphics("models/metrics/plots/rf_vip.png")
 ```
 
 
@@ -807,7 +769,7 @@ Fit the final model on the entire trained dataset.
 
 ```{r}
 
-if (!file.exists("models/rf_model.Rds")) {
+if (!file.exists("models/rf-glove_model.Rds")) {
   
   final_model <- fit(final_rf_wf, model_data)
   
@@ -821,14 +783,14 @@ if (!file.exists("models/rf_model.Rds")) {
 
 ```{r}
 
-if (!file.exists("models/rf_model.Rds")) {
+if (!file.exists("models/rf-glove_model.Rds")) {
   
   write_rds(final_model,
-            path =  "models/rf_model.Rds",
+            path =  "models/rf-glove_model.Rds",
             compress = "gz")
   
   write_rds(rf_fit,
-            path =  "models/rf_workflow.Rds",
+            path =  "models/rf-glove_workflow.Rds",
             compress = "gz")
   
   rf_fit %>% 
@@ -862,10 +824,11 @@ svm_rbf <- svm_rbf(
 
 #### Prepare the workflows
 
+
 ```{r}
 ## Prep the workflow
 svm_wf <- workflow() %>%
-  add_recipe(tfidf_main)%>%
+  add_recipe(glove_main)%>%
   add_model(svm_rbf)
 
 svm_wf
@@ -879,7 +842,7 @@ svm_wf
 
 ```{r}
 
-if (!file.exists("models/svmrbf_model.Rds")) {
+if (!file.exists("models/svmrbf-glove_model.Rds")) {
   
   doParallel::registerDoParallel()
   set.seed(1234)
@@ -890,7 +853,7 @@ if (!file.exists("models/svmrbf_model.Rds")) {
     initial = 25,
     iter = 50,
     # How to measure performance?
-    metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap),
+    metrics = metric_set(kap, roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision),
     control = control_bayes(no_improve = 15, verbose = FALSE, save_pred = TRUE, seed = 1234)
   )
   
@@ -900,7 +863,7 @@ if (!file.exists("models/svmrbf_model.Rds")) {
   ## plot the metrics
   (p1 <- autoplot(svmrbf_bayes_tune) +
       theme_minimal() + 
-      ggtitle("tfidf-svm-rbf model"))
+      ggtitle("glove-svm-rbf model"))
   
   ggsave(p1, 
          filename = "models/metrics/plots/svmrbf_marginals.png",
@@ -910,7 +873,7 @@ if (!file.exists("models/svmrbf_model.Rds")) {
   
   (p2 <- autoplot(svmrbf_bayes_tune, type = "parameters") +
       theme_minimal() + 
-      ggtitle("tfidf-svm-rbf model"))
+      ggtitle("glove-svm-rbf model"))
   
   ggsave(p2, 
          filename = "models/metrics/plots/svmrbf_parameters.png",
@@ -920,10 +883,10 @@ if (!file.exists("models/svmrbf_model.Rds")) {
   
   (p3 <- autoplot(svmrbf_bayes_tune, type = "performance") +
       theme_minimal() + 
-      ggtitle("tfidf-svm-rbf model"))
+      ggtitle("glove-svm-rbf model"))
   
   ggsave(p3, 
-         filename = "models/metrics/plots/svmrbf_performance.png",
+         filename = "models/metrics/plots/svmrbf-glove_performance.png",
          width = 8,
          height = 6,
          device = "png")
@@ -931,19 +894,18 @@ if (!file.exists("models/svmrbf_model.Rds")) {
   ### export metrics
   svmrbf_bayes_tune %>%
     collect_metrics() %>%
-    mutate(model = "rf") %>%
+    mutate(model = "svm-rbf-glove") %>%
     write_csv(path = "models/metrics/svmrbf_metrics_tune.csv")
 
 } else {
   
   ## logging because numbers are almost undistinguishable otherwise
   readr::read_csv("models/metrics/svmrbf_metrics_tune.csv") %>%
-    ggplot(aes(x = mtry, y = mean, color = factor(.metric), shape = factor(min_n))) + 
+    ggplot(aes(x = mtry, y = mean, color = factor(.metric))) + 
     geom_point() + 
     geom_line() +
     theme_minimal() + 
-    labs(color = "metric",
-         shape = "min_n")
+    labs(color = "metric")
   
 }
 ```
@@ -954,7 +916,7 @@ if (!file.exists("models/svmrbf_model.Rds")) {
 
 ```{r}
 
-if (!file.exists("models/svmrbf_model.Rds")) {
+if (!file.exists("models/svmrbf-glove_model.Rds")) {
   
   ## pull the best model specification using roc_auc metric
   # select best model by f1
@@ -981,7 +943,7 @@ if (!file.exists("models/svmrbf_model.Rds")) {
 #### Evaluate on the test-set
 
 ```{r}
-if (!file.exists("models/svmrbf_model.Rds")) {
+if (!file.exists("models/svmrbf-glove_model.Rds")) {
 
   svmrbf_fit <- final_svmrbf_wf %>%
   last_fit(the_split, metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap))
@@ -992,7 +954,7 @@ if (!file.exists("models/svmrbf_model.Rds")) {
 
 ```{r}
 
-if (!file.exists("models/svmrbf_model.Rds")) {
+if (!file.exists("models/svmrbf-glove_model.Rds")) {
   
   ### evaluate with metrics
   test_performance <- svmrbf_fit %>% collect_metrics()
@@ -1000,12 +962,12 @@ if (!file.exists("models/svmrbf_model.Rds")) {
   
   # export
   test_performance %>%
-    mutate(model = "rf") %>%
-    write_csv(path = "models/metrics/svmrbf_metrics.csv")
+    mutate(model = "svm-rbf-glove") %>%
+    write_csv(path = "models/metrics/svmrbf-glove_metrics.csv")
 
 } else {
   
-  readr::read_csv("models/metrics/svmrbf_metrics.csv")
+  readr::read_csv("models/metrics/svmrbf-glove_metrics.csv")
   
 }
 ```
@@ -1013,7 +975,7 @@ if (!file.exists("models/svmrbf_model.Rds")) {
 
 ```{r}
 
-if (!file.exists("models/svmrbf_model.Rds")) {
+if (!file.exists("models/svmrbf-glove_model.Rds")) {
   
   # generate predictions from the test set
   test_predictions <- svmrbf_fit %>% collect_predictions()
@@ -1024,7 +986,7 @@ if (!file.exists("models/svmrbf_model.Rds")) {
 
 } else {
   
-  readr::read_rds("models/svmrbf_workflow.Rds") %>% 
+  readr::read_rds("models/svmrbf-glove_workflow.Rds") %>% 
     collect_predictions() %>%
     conf_mat(ecthr_label, .pred_class)
   
@@ -1036,17 +998,17 @@ if (!file.exists("models/svmrbf_model.Rds")) {
 #### Variable importance
 
 ```{r}
-(p <-svmrbf_fit %>% 
-  pluck(".workflow", 1) %>%   
-  pull_workflow_fit() %>% 
-  vip::vip(num_features = 40) + 
-  theme_minimal())
-
-ggsave(p, 
-       filename = "models/metrics/plots/svmrbf_vip.png",
-       width = 8,
-       height = 6,
-       device = "png")
+# (p <-svmrbf_fit %>% 
+#   pluck(".workflow", 1) %>%   
+#   pull_workflow_fit() %>% 
+#   vip::vip(num_features = 40) + 
+#   theme_minimal())
+# 
+# ggsave(p, 
+#        filename = "models/metrics/plots/svmrbf_vip.png",
+#        width = 8,
+#        height = 6,
+#        device = "png")
 ```
 
 
@@ -1056,7 +1018,7 @@ Fit the final model on the entire trained dataset.
 
 ```{r}
 
-if (!file.exists("models/svmrbf_model.Rds")) {
+if (!file.exists("models/svmrbf-glove_model.Rds")) {
   
   final_model <- fit(final_svmrbf_wf, model_data)
   
@@ -1070,20 +1032,267 @@ if (!file.exists("models/svmrbf_model.Rds")) {
 
 ```{r}
 
-if (!file.exists("models/svmrbf_model.Rds")) {
+if (!file.exists("models/svmrbf-glove_model.Rds")) {
   
   write_rds(final_model,
-            path =  "models/svmrbf_model.Rds",
+            path =  "models/svmrbf-glove_model.Rds",
             compress = "gz")
   
   write_rds(svmrbf_fit,
-            path =  "models/svmrbf_workflow.Rds",
+            path =  "models/svmrbf-glove_workflow.Rds",
             compress = "gz")
   
   svmrbf_fit %>% 
     pluck(".workflow", 1) %>%
     pull_workflow_prepped_recipe() %>%
-    write_rds(path =  "models/svmrbf_prep_recipe.Rds",
+    write_rds(path =  "models/svmrbf-glove_prep_recipe.Rds",
+            compress = "gz")
+
+}
+```
+
+
+### (polynomial) SVM
+
+#### Models
+
+writw up later...
+
+```{r}
+### radial basis function support vector machines
+poly_svm <- svm_poly(
+  cost = tune(), # cost parameter
+  degree = tune() # polynomial degree
+) %>%
+  set_mode("classification") %>%
+  set_engine(engine = "kernlab")
+```
+
+
+#### Prepare the workflows
+
+
+```{r}
+## Prep the workflow
+poly_svm_wf <- workflow() %>%
+  add_recipe(glove_main)%>%
+  add_model(poly_svm)
+
+poly_svm_wf
+```
+
+
+#### Training and tunning the model
+
+...write up later
+  
+
+```{r}
+
+if (!file.exists("models/polysvm-glove_model.Rds")) {
+  
+  doParallel::registerDoParallel()
+  set.seed(1234)
+  poly_svm_bayes_tune <- tune_bayes(
+    poly_svm_wf,
+    resamples = cv_samples,
+    # Generate five at semi-random to start
+    initial = 25,
+    iter = 50,
+    # How to measure performance?
+    metrics = metric_set(kap, roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision),
+    control = control_bayes(no_improve = 15, verbose = FALSE, save_pred = TRUE, seed = 1234)
+  )
+  
+  # notify
+  system(paste("notify-send", "model tuned!", collapse = " "))
+    
+  ## plot the metrics
+  (p1 <- autoplot(poly_svm_bayes_tune) +
+      theme_minimal() + 
+      ggtitle("glove-poly-svm model"))
+  
+  ggsave(p1, 
+         filename = "models/metrics/plots/polysvm_marginals.png",
+         width = 8,
+         height = 6,
+         device = "png")
+  
+  (p2 <- autoplot(poly_svm_bayes_tune, type = "parameters") +
+      theme_minimal() + 
+      ggtitle("glove-poly-svm model"))
+  
+  ggsave(p2, 
+         filename = "models/metrics/plots/polysvm_parameters.png",
+         width = 8,
+         height = 6,
+         device = "png")
+  
+  (p3 <- autoplot(poly_svm_bayes_tune, type = "performance") +
+      theme_minimal() + 
+      ggtitle("glove-poly-svm model"))
+  
+  ggsave(p3, 
+         filename = "models/metrics/plots/polysvm-glove_performance.png",
+         width = 8,
+         height = 6,
+         device = "png")
+  
+  ### export metrics
+  poly_svm_bayes_tune %>%
+    collect_metrics() %>%
+    mutate(model = "poly-svm-glove") %>%
+    write_csv(path = "models/metrics/polysvm_metrics_tune.csv")
+
+} else {
+  
+  ## logging because numbers are almost undistinguishable otherwise
+  readr::read_csv("models/metrics/polysvm_metrics_tune.csv") %>%
+    ggplot(aes(x = mtry, y = mean, color = factor(.metric))) + 
+    geom_point() + 
+    geom_line() +
+    theme_minimal() + 
+    labs(color = "metric")
+  
+}
+```
+
+
+#### Select best model and finalize the workflow
+
+
+```{r}
+
+if (!file.exists("models/polysvm-glove_model.Rds")) {
+  
+  ## pull the best model specification using roc_auc metric
+  # select best model by f1
+  final_model <- poly_svm_bayes_tune %>%
+    select_best(metric = "bal_accuracy")
+  
+  ## finalize
+  final_polysvm_wf <- finalize_workflow(
+    poly_svm_wf,
+    final_model
+  )
+  
+  final_svmrbf_wf
+
+} else {
+  
+  readr::read_rds("models/polysvm_workflow.Rds") %>% 
+  pluck(".workflow", 1)
+  
+}
+```
+
+
+#### Evaluate on the test-set
+
+```{r}
+if (!file.exists("models/polysvm-glove_model.Rds")) {
+
+  svmrbf_fit <- final_polysvm_wf %>%
+  last_fit(the_split, metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap))
+  
+}
+```
+
+
+```{r}
+
+if (!file.exists("models/polysvm-glove_model.Rds")) {
+  
+  ### evaluate with metrics
+  test_performance <- svmrbf_fit %>% collect_metrics()
+  test_performance
+  
+  # export
+  test_performance %>%
+    mutate(model = "poly-svm-glove") %>%
+    write_csv(path = "models/metrics/polysvm-glove_metrics.csv")
+
+} else {
+  
+  readr::read_csv("models/metrics/polysvm-glove_metrics.csv")
+  
+}
+```
+
+
+```{r}
+
+if (!file.exists("models/polysvm-glove_model.Rds")) {
+  
+  # generate predictions from the test set
+  test_predictions <- svmrbf_fit %>% collect_predictions()
+  
+  ## confusion matrix
+  test_predictions %>%
+    conf_mat(ecthr_label, .pred_class)
+
+} else {
+  
+  readr::read_rds("models/polysvm-glove_workflow.Rds") %>% 
+    collect_predictions() %>%
+    conf_mat(ecthr_label, .pred_class)
+  
+}
+
+```
+
+
+#### Variable importance
+
+```{r}
+# (p <-svmrbf_fit %>% 
+#   pluck(".workflow", 1) %>%   
+#   pull_workflow_fit() %>% 
+#   vip::vip(num_features = 40) + 
+#   theme_minimal())
+# 
+# ggsave(p, 
+#        filename = "models/metrics/plots/svmrbf_vip.png",
+#        width = 8,
+#        height = 6,
+#        device = "png")
+```
+
+
+#### Fitting the final model
+
+Fit the final model on the entire trained dataset.
+
+```{r}
+
+if (!file.exists("models/polysvm-glove_model.Rds")) {
+  
+  final_model <- fit(final_svmrbf_wf, model_data)
+  
+  final_model
+
+}
+```
+
+
+#### Export the final model
+
+```{r}
+
+if (!file.exists("models/polysvm-glove_model.Rds")) {
+  
+  write_rds(final_model,
+            path =  "models/polysvm-glove_model.Rds",
+            compress = "gz")
+  
+  write_rds(svmrbf_fit,
+            path =  "models/polysvm-glove_workflow.Rds",
+            compress = "gz")
+  
+  svmrbf_fit %>% 
+    pluck(".workflow", 1) %>%
+    pull_workflow_prepped_recipe() %>%
+    write_rds(path =  "models/polysvm-glove_prep_recipe.Rds",
             compress = "gz")
 
 }
