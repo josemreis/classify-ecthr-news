@@ -1,73 +1,152 @@
+## load the workflow
+best_fit <- read_rds("models/rf-glove_workflow.Rds")
+best_wf <- best_fit %>%
+  pluck(".workflow", 1)
 
 best_k <- function(k) {
   
-  tfidf_main <- recipe(
+  ## update recipe
+  new_recipe <- recipe(
     ecthr_label ~ .,
     data = train_data,
   ) %>%
-    update_role(model_id, new_role = "id variable") %>%
+    update_role(model_id, new_role = "id variable") %>% ## removing several variables which reduced/neutral_to performance
     step_rm(c(lang_og, model_id, jaccard_distance, country_match_ratio, contains("ner"))) %>% ## remove the language variable (see above)
     step_mutate(## discretize the date distance variable
       date_distance = date_distance %>% str_replace("-", "minus_") %>% as_factor()
     ) %>%
-    step_textfeature(text) %>%
-    step_dummy(date_distance) %>%
-    step_log(article_nchar) %>%
-    step_tokenize(text) %>%
-    step_word_embeddings(text, embeddings = textdata::embedding_glove6b(dimensions = 50)) %>%
-    step_zv(all_predictors()) %>%
-    step_normalize(all_numeric(), -article_nchar, -all_outcomes()) %>%
-    step_smote(ecthr_label, seed = 1234, neighbors = k) %>%
-    prep(train_data)
+    step_dummy(date_distance) %>% ## date as dummy
+    step_log(article_nchar) %>% ## log numbe rof characets
+    step_tokenize(text) %>% ## tokenize and vectorize
+    step_word_embeddings(text, embeddings = embeddings) %>%
+    step_zv(all_predictors()) %>% # remove variables with zero variance
+    step_normalize(all_numeric(), -article_nchar, -all_outcomes()) %>% ## center and scale
+    themis::step_smote(ecthr_label, neighbors = k, seed = 1234)
   
-  train <- tfidf_main  %>%
-    juice() 
+  ## new workflow
+  new_wf <- best_wf %>%
+    update_recipe(new_recipe)
+  # fit
+  fit2 <- new_wf %>%
+    last_fit(the_split, metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap))
+  # generate predictions from the test set
+  test_predictions <- fit2 %>% collect_predictions()
+  ## confusion matrix
+  test_predictions %>%
+    conf_mat(ecthr_label, .pred_class) %>%
+    print()
   
-  test <- tfidf_main %>%
-    bake(test_data) 
+  ## assess
+  test_performance <- fit2 %>% 
+    collect_metrics() %>%
+    mutate(model = "ranger",
+           neighbors = k)
   
-  ### Cost-sensitive random forests
-  rf_cs <- rand_forest(
-    trees = 1000, # number of randomly samped predictor in each split when creating the trees
+  print(test_performance)
+  return(test_performance)
+  
+  
+}
+    
+    k_df <- furrr::future_map_dfr(seq(1, 32, by = 1), best_k)
+    k_df %>% 
+      ggplot(aes(neighbors, .estimate, color = .metric)) + 
+      geom_point() + 
+      geom_line() +
+      ggtitle("Comparing sizes of K for smote sampling") + 
+      labs(caption = "ranger with default parameters")
+    
+    
+    bk_df %>%
+      filter(.metric == "f_meas") %>%
+      arrange(desc(.estimate)) 
+    
+    k_df %>%
+      filter(.metric == "f_meas") %>%
+      arrange(desc(.estimate))
+    
+
+###  Best k for border-smote
+## load the workflow
+best_fit <- read_rds("models/rf-glove_workflow.Rds")
+best_wf <- best_fit %>%
+  pluck(".workflow", 1)
+## function
+best_bk <- function(k) {
+  
+  ## update recipe
+  new_recipe <- recipe(
+    ecthr_label ~ .,
+    data = train_data,
   ) %>%
-    set_mode("classification") %>%
-    set_engine(
-      engine = "ranger",
-      seed = 1234,
-      num.threads = 4,
-      importance = "impurity",
-      sample.fraction = c(.5, .5)
-    )
+    update_role(model_id, new_role = "id variable") %>% ## removing several variables which reduced/neutral_to performance
+    step_rm(c(lang_og, model_id, jaccard_distance, country_match_ratio, contains("ner"))) %>% ## remove the language variable (see above)
+    step_mutate(## discretize the date distance variable
+      date_distance = date_distance %>% str_replace("-", "minus_") %>% as_factor()
+    ) %>%
+    step_dummy(date_distance) %>% ## date as dummy
+    step_log(article_nchar) %>% ## log numbe rof characets
+    step_tokenize(text) %>% ## tokenize and vectorize
+    step_word_embeddings(text, embeddings = embeddings) %>%
+    step_zv(all_predictors()) %>% # remove variables with zero variance
+    step_normalize(all_numeric(), -article_nchar, -all_outcomes()) %>% ## center and scale
+    themis::step_bsmote(ecthr_label, neighbors = k, seed = 1234)
   
-  rf_model <- rf_cs %>%
-    fit(ecthr_label ~ ., data = train)
+  ## new workflow
+  new_wf <- best_wf %>%
+    update_recipe(new_recipe)
+  # fit
+  fit2 <- new_wf %>%
+    last_fit(the_split, metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap))
+  # generate predictions from the test set
+  test_predictions <- fit2 %>% collect_predictions()
+  ## confusion matrix
+  test_predictions %>%
+    conf_mat(ecthr_label, .pred_class) %>%
+    print()
   
-  eval_tibble <- test %>%
-    select(ecthr_label) %>%
-    mutate(
-      class = parsnip:::predict_class(rf_model, test)
-    )
+  ## assess
+  test_performance <- fit2 %>% 
+    collect_metrics() %>%
+    mutate(model = "ranger",
+           neighbors = k)
   
-  
-  pred <- predict(rf_model, test, type = "prob")
-  
-  
-  conf_mat(eval_tibble, ecthr_label, class)
-  bal_accuracy(eval_tibble, ecthr_label,class)
-  (kap <- kap(eval_tibble, ecthr_label,class))
-  (f <- f_meas(eval_tibble, ecthr_label,class, event_level = "second"))
-  
-  out <- rbind(kap, f) %>%
-    mutate(neighbor = k)
-  
-  return(out)
+  print(test_performance)
+  return(test_performance)
   
 }
 
-k_df <- map_df(seq(8, 32, by = 1), best_k)
-k_df %>% 
-  ggplot(aes(neighbor, .estimate, color = .metric)) + 
+bk_df <- map_df(seq(8, 32, by = 1), best_bk)
+bk_df %>% 
+  ggplot(aes(neighbors, .estimate, color = .metric)) + 
   geom_point() + 
   geom_line() +
+  ggtitle("Comparing sizes of K for border smote sampling") + 
+  labs(caption = "ranger")
+
+bk_df %>% 
+  mutate(sampling_technique = "smote") %>%
+  bind_rows(
+    k_df %>%
+      mutate(sampling_technique = "border smote")
+  ) %>%
+  ggplot(aes(neighbors, .estimate, color = .metric)) + 
+  geom_point() + 
+  geom_line() +
+  facet_wrap(~sampling_technique) +
+  theme_minimal() +
   ggtitle("Comparing sizes of K for smote sampling") + 
-  labs(caption = "ranger with default parameters")
+  labs(caption = "ranger")
+
+
+bk_df %>% 
+  mutate(sampling_technique = "smote") %>%
+  bind_rows(
+    k_df %>%
+      mutate(sampling_technique = "border smote")
+  ) %>%
+  filter(.metric == "f_meas") %>%
+  arrange(desc(.estimate)) %>%
+  View()
+
+

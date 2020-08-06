@@ -76,7 +76,7 @@ Load the model dataset.
 # keep features plus c
 model_data <- read_csv("../../data/model_data.csv.gz") %>%
   mutate(model_id = paste(case_id, article_id, sep = "_"),
-         ecthr_label = as_factor(ecthr_label)) %>%
+         ecthr_label = factor(ecthr_label, levels = c("1", "0"), labels = c("1", "0"))) %>%
   select(ecthr_label, text, article_nchar, date_distance, cosine_similarity_tf, jaccard_distance, lang_og = source_lang_alpha2, contains("ner"), country_match_ratio, model_id) %>%
   filter(article_nchar > 500) %>%
   distinct(text, .keep_all = TRUE) %>%
@@ -205,12 +205,12 @@ test_data %>%
   summarise(n = n())
 ```
 
-10-fold samples (stratified by the outcome variable) from the training data for cross-validation during tuning of the training models.
+5-fold cross validation with three repeats (stratified by the outcome variable) from the training data for cross-validation during tuning of the training models.
 
 ```{r}
 # 10-fold cross-validation
 set.seed(1234)
-cv_samples <- vfold_cv(train_data, v = 10, repeats = 1, strata = "ecthr_label")
+cv_samples <- vfold_cv(train_data, v = 5, repeats = 3, strata = "ecthr_label")
 cv_samples
 ```
 
@@ -258,7 +258,7 @@ glove_main <- recipe(
     step_word_embeddings(text, embeddings = embeddings) %>%
     step_zv(all_predictors()) %>% # remove variables with zero variance
     step_normalize(all_numeric(), -article_nchar, -all_outcomes()) %>% ## center and scale
-  step_smote(ecthr_label, neighbors = 30) ## smote sampling, k = 30
+    step_smote(ecthr_label, neighbors = 27, seed = 1234) ## smote sampling, k = 27
   
 glove_main
 ```
@@ -323,8 +323,8 @@ if (!file.exists("models/glove-lasso_model.Rds")) {
     # Generate five at semi-random to start
     initial = 25,
     iter = 50,
-    # How to measure performance?
-    metrics = metric_set(kap, roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision),
+    # How to measure performance? cohen's kappa
+    metrics = metric_set(kap, bal_accuracy, roc_auc, f_meas, ppv, npv, recall, precision),
     control = control_bayes(no_improve = 15, verbose = FALSE, save_pred = TRUE, seed = 1234)
   )
   
@@ -388,9 +388,9 @@ if (!file.exists("models/glove-lasso_model.Rds")) {
 
 ```{r}
 if (!file.exists("models/glove-lasso_model.Rds")) {
-  # select best model by balanced accuracy
+  # select best model by kappa
   final_model <- lasso_bayes_tune %>%
-    select_best(metric = "bal_accuracy")
+    select_best(metric = "kap")
   
   ## finalize
   final_lasso_wf <- finalize_workflow(
@@ -539,8 +539,8 @@ Next, a random forests models following ``ranger``'s implementation. Will deal w
 ### Cost-sensitive random forests
 rf_cs <- rand_forest(
   mtry = tune(),
-  min_n = 1,
-  trees = 500
+  min_n = tune(),
+  trees = 1000
 ) %>%
   set_mode("classification") %>%
   set_engine(
@@ -577,20 +577,24 @@ Tunable hyperparameters^[[see](https://arxiv.org/pdf/1804.03515.pdf)]:
 
 if (!file.exists("models/rf-glove_model.Rds")) {
   
+  ## set up the parameters efore hand
+  rf_param <- rf_cs_wf %>%
+    parameters() %>%
+    update(mtry = finalize(mtry(), select(juice(prep(glove_main)), -ecthr_label)))
+  
+  ## tune
   doParallel::registerDoParallel()
   set.seed(1234)
   rf_bayes_tune <- tune_bayes(
     rf_cs_wf,
     resamples = cv_samples,
     # To use non-default parameter ranges
-    param_info = parameters(
-      mtry() %>% range_set(c(8, 60))
-      ),
+    param_info = rf_param,
     # Generate five at semi-random to start
     initial = 25,
     iter = 50,
-    # How to measure performance? Select bbest based on cohens kappa
-    metrics = metric_set(kap, roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision),
+    # How to measure performance? cohen's kappa
+    metrics = metric_set(kap, bal_accuracy, roc_auc, f_meas, ppv, npv, recall, precision),
     control = control_bayes(no_improve = 15, verbose = FALSE, save_pred = TRUE, seed = 1234)
 )
 
@@ -657,10 +661,9 @@ if (!file.exists("models/rf-glove_model.Rds")) {
 
 if (!file.exists("models/rf-glove_model.Rds")) {
   
-  ## pull the best model specification using roc_auc metric
-  # select best model by balanced accuracy
+  # select best model by cohen's kappa
   final_model <- rf_bayes_tune %>%
-    select_best(metric = "bal_accuracy")
+    select_best(metric = "kap")
   
   ## finalize
   final_rf_wf <- finalize_workflow(
@@ -849,11 +852,15 @@ if (!file.exists("models/svmrbf-glove_model.Rds")) {
   svmrbf_bayes_tune <- tune_bayes(
     svm_wf,
     resamples = cv_samples,
+    param_info = parameters(
+      cost(),
+      rbf_sigma()
+    ),
     # Generate five at semi-random to start
     initial = 25,
     iter = 50,
-    # How to measure performance?
-    metrics = metric_set(kap, roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision),
+    # How to measure performance? cohen's kappa
+    metrics = metric_set(kap, bal_accuracy, roc_auc, f_meas, ppv, npv, recall, precision),
     control = control_bayes(no_improve = 15, verbose = FALSE, save_pred = TRUE, seed = 1234)
   )
   
@@ -900,12 +907,7 @@ if (!file.exists("models/svmrbf-glove_model.Rds")) {
 } else {
   
   ## logging because numbers are almost undistinguishable otherwise
-  readr::read_csv("models/metrics/svmrbf_metrics_tune.csv") %>%
-    ggplot(aes(x = mtry, y = mean, color = factor(.metric))) + 
-    geom_point() + 
-    geom_line() +
-    theme_minimal() + 
-    labs(color = "metric")
+  knitr::include_graphics("models/metrics/plots/svmrbf_marginals.png")
   
 }
 ```
@@ -919,9 +921,9 @@ if (!file.exists("models/svmrbf-glove_model.Rds")) {
 if (!file.exists("models/svmrbf-glove_model.Rds")) {
   
   ## pull the best model specification using roc_auc metric
-  # select best model by f1
+  # select best model by cohen's kappa
   final_model <- svmrbf_bayes_tune %>%
-    select_best(metric = "bal_accuracy")
+    select_best(metric = "kap")
   
   ## finalize
   final_svmrbf_wf <- finalize_workflow(
@@ -933,7 +935,7 @@ if (!file.exists("models/svmrbf-glove_model.Rds")) {
 
 } else {
   
-  readr::read_rds("models/svmrbf_workflow.Rds") %>% 
+  readr::read_rds("models/svmrbf-glove_workflow.Rds") %>% 
   pluck(".workflow", 1)
   
 }
@@ -941,6 +943,7 @@ if (!file.exists("models/svmrbf-glove_model.Rds")) {
 
 
 #### Evaluate on the test-set
+
 
 ```{r}
 if (!file.exists("models/svmrbf-glove_model.Rds")) {
@@ -1054,11 +1057,13 @@ if (!file.exists("models/svmrbf-glove_model.Rds")) {
 
 ### (polynomial) SVM
 
+**not fitting!**
+
 #### Models
 
 writw up later...
 
-```{r}
+```{r eval=FALSE, include=TRUE}
 ### radial basis function support vector machines
 poly_svm <- svm_poly(
   cost = tune(), # cost parameter
@@ -1072,7 +1077,7 @@ poly_svm <- svm_poly(
 #### Prepare the workflows
 
 
-```{r}
+```{r eval=FALSE, include=TRUE}
 ## Prep the workflow
 poly_svm_wf <- workflow() %>%
   add_recipe(glove_main)%>%
@@ -1085,9 +1090,8 @@ poly_svm_wf
 #### Training and tunning the model
 
 ...write up later
-  
 
-```{r}
+```{r eval=FALSE, include=TRUE}
 
 if (!file.exists("models/polysvm-glove_model.Rds")) {
   
@@ -1096,11 +1100,15 @@ if (!file.exists("models/polysvm-glove_model.Rds")) {
   poly_svm_bayes_tune <- tune_bayes(
     poly_svm_wf,
     resamples = cv_samples,
+    param_info = parameters(
+      cost(),
+      degree()
+    ),
     # Generate five at semi-random to start
     initial = 25,
     iter = 50,
-    # How to measure performance?
-    metrics = metric_set(kap, roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision),
+    # How to measure performance? cohen's kappa
+    metrics = metric_set(kap, bal_accuracy, roc_auc, f_meas, ppv, npv, recall, precision),
     control = control_bayes(no_improve = 15, verbose = FALSE, save_pred = TRUE, seed = 1234)
   )
   
@@ -1161,14 +1169,13 @@ if (!file.exists("models/polysvm-glove_model.Rds")) {
 #### Select best model and finalize the workflow
 
 
-```{r}
+```{r eval=FALSE, include=TRUE}
 
 if (!file.exists("models/polysvm-glove_model.Rds")) {
   
-  ## pull the best model specification using roc_auc metric
-  # select best model by f1
+  # select best model by cohen's kappa
   final_model <- poly_svm_bayes_tune %>%
-    select_best(metric = "bal_accuracy")
+    select_best(metric = "kap")
   
   ## finalize
   final_polysvm_wf <- finalize_workflow(
@@ -1220,7 +1227,7 @@ if (!file.exists("models/polysvm-glove_model.Rds")) {
 ```
 
 
-```{r}
+```{r eval=FALSE, include=TRUE}
 
 if (!file.exists("models/polysvm-glove_model.Rds")) {
   
@@ -1263,7 +1270,7 @@ if (!file.exists("models/polysvm-glove_model.Rds")) {
 
 Fit the final model on the entire trained dataset.
 
-```{r}
+```{r eval=FALSE, include=TRUE}
 
 if (!file.exists("models/polysvm-glove_model.Rds")) {
   
@@ -1277,7 +1284,7 @@ if (!file.exists("models/polysvm-glove_model.Rds")) {
 
 #### Export the final model
 
-```{r}
+```{r eval=FALSE, include=TRUE}
 
 if (!file.exists("models/polysvm-glove_model.Rds")) {
   
@@ -1297,3 +1304,260 @@ if (!file.exists("models/polysvm-glove_model.Rds")) {
 
 }
 ```
+
+
+### XGBoost
+
+...write up late
+
+#### Models
+
+...
+
+```{r}
+### radial basis function support vector machines
+xgboost <- boost_tree(
+  trees = 1000, 
+  tree_depth = tune(), min_n = tune(),
+  loss_reduction = tune(),  
+  sample_size = tune(), mtry = tune(),         
+  learn_rate = tune(),                    
+) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+```
+
+
+#### Prepare the workflows
+
+
+```{r}
+## Prep the workflow
+xgb_wf <- workflow() %>%
+  add_recipe(glove_main)%>%
+  add_model(xgboost)
+
+xgb_wf
+
+xgb_wf %>%
+  parameters()
+```
+
+
+#### Training and tunning the model
+
+...write up later
+  
+
+```{r}
+
+if (!file.exists("models/xgb-glove_model.Rds")) {
+  
+  ## set up the parameters efore hand
+  xgb_param <- xgb_wf %>%
+    parameters() %>%
+    update(mtry = finalize(mtry(), select(juice(prep(glove_main)), -ecthr_label)))
+  
+  ## tune
+  doParallel::registerDoParallel()
+  set.seed(1234)
+  xgb_bayes_tune <- tune_bayes(
+    xgb_wf,
+    resamples = cv_samples,
+    param_info = xgb_param,
+    # Generate five at semi-random to start
+    initial = 25,
+    iter = 50,
+    # How to measure performance? cohen's kappa
+    metrics = metric_set(kap, bal_accuracy, roc_auc, f_meas, ppv, npv, recall, precision),
+    control = control_bayes(no_improve = 15, verbose = FALSE, save_pred = TRUE, seed = 1234)
+  )
+    
+  # notify
+  system(paste("notify-send", "model tuned!", collapse = " "))
+    
+  ## plot the metrics
+  (p1 <- autoplot(xgb_bayes_tune) +
+      theme_minimal() + 
+      ggtitle("glove-xgb model"))
+  
+  ggsave(p1, 
+         filename = "models/metrics/plots/xgb_marginals.png",
+         width = 8,
+         height = 6,
+         device = "png")
+  
+  (p2 <- autoplot(xgb_bayes_tune, type = "parameters") +
+      theme_minimal() + 
+      ggtitle("xgb model"))
+  
+  ggsave(p2, 
+         filename = "models/metrics/plots/svmrbf_parameters.png",
+         width = 8,
+         height = 6,
+         device = "png")
+  
+  (p3 <- autoplot(xgb_bayes_tune, type = "performance") +
+      theme_minimal() + 
+      ggtitle("glove-xgb model"))
+  
+  ggsave(p3, 
+         filename = "models/metrics/plots/xgb-glove_performance.png",
+         width = 8,
+         height = 6,
+         device = "png")
+  
+  ### export metrics
+  svmrbf_bayes_tune %>%
+    collect_metrics() %>%
+    mutate(model = "svm-rbf-glove") %>%
+    write_csv(path = "models/metrics/xgb_metrics_tune.csv")
+
+} else {
+  
+  ## logging because numbers are almost undistinguishable otherwise
+  knitr::include_graphics("models/metrics/plots/xgb_marginals.png")
+  
+}
+```
+
+
+#### Select best model and finalize the workflow
+
+
+```{r}
+if (!file.exists("models/xgb-glove_model.Rds")) {
+  
+  # select best model by cohen's kappa
+  final_model <- xgb_bayes_tune %>%
+    select_best(metric = "kap")
+  
+  ## finalize
+  final_xgb_wf <- finalize_workflow(
+    xgb_wf,
+    final_model
+  )
+  
+  final_xgb_wf
+
+} else {
+  
+  readr::read_rds("models/xgb-glove_workflow.Rds") %>% 
+  pluck(".workflow", 1)
+  
+}
+```
+
+
+#### Evaluate on the test-set
+
+
+```{r}
+if (!file.exists("models/xgb-glove_model.Rds")) {
+
+  xgb_fit <- final_xgb_wf %>%
+  last_fit(the_split, metrics = metric_set(roc_auc, bal_accuracy, f_meas, ppv, npv, recall, precision, kap))
+  
+}
+```
+
+
+```{r}
+
+if (!file.exists("models/xgb-glove_model.Rds")) {
+  
+  ### evaluate with metrics
+  test_performance <- xgb_fit %>% collect_metrics()
+  test_performance
+  
+  # export
+  test_performance %>%
+    mutate(model = "xgb-glove") %>%
+    write_csv(path = "models/metrics/xgb-glove_metrics.csv")
+
+} else {
+  
+  readr::read_csv("models/metrics/xgb-glove_metrics.csv")
+  
+}
+```
+
+
+```{r}
+
+if (!file.exists("models/xgb-glove_model.Rds")) {
+  
+  # generate predictions from the test set
+  test_predictions <- xgb_fit %>% collect_predictions()
+  
+  ## confusion matrix
+  test_predictions %>%
+    conf_mat(ecthr_label, .pred_class)
+
+} else {
+  
+  readr::read_rds("models/xgb-glove_workflow.Rds") %>% 
+    collect_predictions() %>%
+    conf_mat(ecthr_label, .pred_class)
+  
+}
+
+```
+
+
+#### Variable importance
+
+```{r}
+# (p <-svmrbf_fit %>% 
+#   pluck(".workflow", 1) %>%   
+#   pull_workflow_fit() %>% 
+#   vip::vip(num_features = 40) + 
+#   theme_minimal())
+# 
+# ggsave(p, 
+#        filename = "models/metrics/plots/svmrbf_vip.png",
+#        width = 8,
+#        height = 6,
+#        device = "png")
+```
+
+
+#### Fitting the final model
+
+Fit the final model on the entire trained dataset.
+
+```{r}
+
+if (!file.exists("models/xgb-glove_model.Rds")) {
+  
+  final_model <- fit(final_xgb_wf, model_data)
+  
+  final_model
+
+}
+```
+
+
+#### Export the final model
+
+```{r}
+
+if (!file.exists("models/xgb-glove_model.Rds")) {
+  
+  write_rds(final_model,
+            path =  "models/xgb-glove_model.Rds",
+            compress = "gz")
+  
+  write_rds(xgb_fit,
+            path =  "models/xgb-glove_workflow.Rds",
+            compress = "gz")
+  
+  xgb_fit %>% 
+    pluck(".workflow", 1) %>%
+    pull_workflow_prepped_recipe() %>%
+    write_rds(path =  "models/xgb-glove_prep_recipe.Rds",
+            compress = "gz")
+
+}
+```
+
