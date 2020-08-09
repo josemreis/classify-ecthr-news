@@ -60,10 +60,10 @@ for (pack in packs){
 Update model data.
 
 ```{r eval=FALSE, message=FALSE, include=TRUE, results='hide'}
-if (!file.exists("/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/model/scripts/data/model_data.csv.gz")) {
-  
+if (!file.exists('/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/model/data/model_data.csv.gz')) {
+
   source("../1_prep_model_data.R")
-  
+
 }
 ```
 
@@ -205,12 +205,13 @@ test_data %>%
   summarise(n = n())
 ```
 
-5-fold cross validation with three repeats (stratified by the outcome variable) from the training data for cross-validation during tuning of the training models.
+10-fold cross validation repeated 5 times (stratified by the outcome variable) from the training data for model selection.
 
 ```{r}
 # 10-fold cross-validation
 set.seed(1234)
-cv_samples <- vfold_cv(train_data, v = 5, repeats = 3, strata = "ecthr_label")
+cv_samples <- vfold_cv(data = train_data, v = 10, repeats = 5, strata = "ecthr_label")
+
 cv_samples
 ```
 
@@ -234,7 +235,7 @@ Going with td-idf as it performed better than tf BoWs.
 
 Pre-processing recipe:
 
-  - word vectors fasttext/glove (respectively 50 dim and pre-trained; 100 dim and trained on corpus) for feature reduction; more details above, also [see](http://www.aclweb.org/anthology/D14-1162) [as well as](https://arxiv.org/abs/1607.04606)
+  - word vectors fasttext/wv (respectively 50 dim and pre-trained; 100 dim and trained on corpus) for feature reduction; more details above, also [see](http://www.aclweb.org/anthology/D14-1162) [as well as](https://arxiv.org/abs/1607.04606)
   - number of character natural logged;
   - date distance discretized and turned into dummies;
   - SMOTE oversampling for tackling class imbalance and poor data, synctatic minority data (https://arxiv.org/pdf/1106.1813.pdf). Neighbors (k) tuneable.
@@ -245,7 +246,7 @@ Pre-processing recipe:
 embeddings <- read_csv('../../data/interm_data/fasttext_tidy.csv.gz')
 glimpse(embeddings)
 ## prep the recipe
-wv_main <- recipe(
+wv_rec <- recipe(
     ecthr_label ~ .,
     data = train_data,
   ) %>%
@@ -262,7 +263,7 @@ wv_main <- recipe(
     step_normalize(all_numeric(), -article_nchar, -all_outcomes()) %>% ## center and scale
     step_smote(ecthr_label, neighbors = 27, seed = 1234) ## smote sampling, k = 27
   
-wv_main
+wv_rec
 ```
 
 ## Bulding the models
@@ -270,6 +271,8 @@ wv_main
 The choice of models will be based on their (i) explainability (less black-box) and (ii) availability of implementation of cost-weights to compensate the class imbalance
 
 ### Penalized logistic regression (LASSO)
+
+**switched to elastic net! re-write**
 
 First, we fit a logistic regression penalized with a LASSO (least absolute shrinkage and selection operator)^[using ``glmnet``, [see](https://web.stanford.edu/~hastie/glmnet/glmnet_alpha.html)]] - adding a penalty term to the log likelihood function so as to shrink coefficients of the variables which contribute more to the error in te model to 0. Hence operating as feature selection. This should result in a more efficient model and less prone to overfitting. 
 
@@ -285,7 +288,7 @@ We will first, select the best model using the main recipe. We then select the b
 ### penalized logistic regression (lasso)
 # penalty -> lambda; allowed to vary for hyperparameter tuning
 # mixture = 1 for lasso regression
-lasso_spec <- logistic_reg(penalty = tune(), mixture = 1) %>%
+lasso_spec <- logistic_reg(penalty = tune(), mixture = tune()) %>%
   set_mode("classification") %>%
   set_engine("glmnet")
 ```
@@ -299,7 +302,7 @@ We will add ``step_normalize(all_numeric())``, i.e. normalize all predictors, as
 ```{r}
 ## Prep the workflow: TFIDF
 lasso_wf <- workflow() %>%
-  add_recipe(wv_main) %>%
+  add_recipe(wv_rec) %>%
   add_model(lasso_spec)
 
 lasso_wf
@@ -310,18 +313,19 @@ lasso_wf
 
 Tunning the model with Bayesian model-based optimization [see](https://towardsdatascience.com/a-conceptual-explanation-of-bayesian-model-based-hyperparameter-optimization-for-machine-learning-b8172278050f). 
 
+
 ```{r}
 if (!file.exists("models/wv-lasso_model.Rds")) {
   ## parallel
   # Sequential tuning, yet For "Bayesian optimization, parallel processing is used to estimate the resampled performance values once a new candidate set of values are estimated."
-  doParallel::registerDoParallel()
   set.seed(1234)
+  doParallel::registerDoParallel()
   ## run
   lasso_bayes_tune <- tune_bayes(
     lasso_wf,
     resamples = cv_samples,
     # Going with default range values for lambda
-    param_info = parameters(penalty()),
+    param_info = parameters(penalty(), mixture()),
     # Generate five at semi-random to start
     initial = 25,
     iter = 50,
@@ -539,7 +543,7 @@ Next, a random forests models following ``ranger``'s implementation. Will deal w
 
 ```{r}
 ### Cost-sensitive random forests
-rf_cs <- rand_forest(
+rf <- rand_forest(
   mtry = tune(),
   min_n = tune(),
   trees = 1000
@@ -560,11 +564,11 @@ rf_cs <- rand_forest(
 
 ```{r}
 ## Prep the workflow
-rf_cs_wf <- workflow() %>%
-  add_recipe(glove_main)%>%
-  add_model(rf_cs)
+rf_wf <- workflow() %>%
+  add_recipe(wv_rec)%>%
+  add_model(rf)
 
-rf_cs_wf
+rf_wf
 ```
 
 
@@ -580,15 +584,15 @@ Tunable hyperparameters^[[see](https://arxiv.org/pdf/1804.03515.pdf)]:
 if (!file.exists("models/rf-wv_model.Rds")) {
   
   ## set up the parameters efore hand
-  rf_param <- rf_cs_wf %>%
+  rf_param <- rf_wf %>%
     parameters() %>%
-    update(mtry = finalize(mtry(), select(juice(prep(wv_main)), -ecthr_label)))
-  
+    update(mtry = finalize(mtry(), select(juice(prep(wv_rec)), -ecthr_label)))
   ## tune
-  doParallel::registerDoParallel()
   set.seed(1234)
+  doParallel::registerDoParallel()
+  
   rf_bayes_tune <- tune_bayes(
-    rf_cs_wf,
+    rf_wf,
     resamples = cv_samples,
     # To use non-default parameter ranges
     param_info = rf_param,
@@ -669,7 +673,7 @@ if (!file.exists("models/rf-wv_model.Rds")) {
   
   ## finalize
   final_rf_wf <- finalize_workflow(
-    rf_cs_wf,
+    rf_wf,
     final_model
   )
   
@@ -833,7 +837,7 @@ svm_rbf <- svm_rbf(
 ```{r}
 ## Prep the workflow
 svm_wf <- workflow() %>%
-  add_recipe(wv_main)%>%
+  add_recipe(wv_rec)%>%
   add_model(svm_rbf)
 
 svm_wf
@@ -849,8 +853,10 @@ svm_wf
 
 if (!file.exists("models/svmrbf-wv_model.Rds")) {
   
-  doParallel::registerDoParallel()
   set.seed(1234)
+  
+  doParallel::registerDoParallel()
+  
   svmrbf_bayes_tune <- tune_bayes(
     svm_wf,
     resamples = cv_samples,
@@ -1082,7 +1088,7 @@ poly_svm <- svm_poly(
 ```{r eval=FALSE, include=TRUE}
 ## Prep the workflow
 poly_svm_wf <- workflow() %>%
-  add_recipe(wv_main)%>%
+  add_recipe(wv_rec)%>%
   add_model(poly_svm)
 
 poly_svm_wf
@@ -1336,7 +1342,7 @@ xgboost <- boost_tree(
 ```{r}
 ## Prep the workflow
 xgb_wf <- workflow() %>%
-  add_recipe(wv_main)%>%
+  add_recipe(wv_rec)%>%
   add_model(xgboost)
 
 xgb_wf
@@ -1358,11 +1364,14 @@ if (!file.exists("models/xgb-wv_model.Rds")) {
   ## set up the parameters efore hand
   xgb_param <- xgb_wf %>%
     parameters() %>%
-    update(mtry = finalize(mtry(), select(juice(prep(wv_main)), -ecthr_label)))
+    update(mtry = finalize(mtry(), select(juice(prep(wv_rec)), -ecthr_label)))
   
   ## tune
-  doParallel::registerDoParallel()
   set.seed(1234)
+  
+  doParallel::registerDoParallel()
+  
+  
   xgb_bayes_tune <- tune_bayes(
     xgb_wf,
     resamples = cv_samples,
