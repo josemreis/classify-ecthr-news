@@ -1,9 +1,0 @@
-.metric,.estimator,.estimate,model
-bal_accuracy,binary,0.8486622073578596,svm-rbf-glove
-f_meas,binary,0.9128481581311769,svm-rbf-glove
-ppv,binary,0.9864077669902912,svm-rbf-glove
-npv,binary,0.3023255813953487,svm-rbf-glove
-recall,binary,0.8494983277591973,svm-rbf-glove
-precision,binary,0.9864077669902913,svm-rbf-glove
-kap,binary,0.38047445255474427,svm-rbf-glove
-roc_auc,binary,0.9144521593718191,svm-rbf-glove

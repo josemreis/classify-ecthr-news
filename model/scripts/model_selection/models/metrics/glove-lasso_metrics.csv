@@ -1,9 +1,0 @@
-.metric,.estimator,.estimate,model
-bal_accuracy,binary,0.8474080267558528,lasso-glove
-f_meas,binary,0.4983164983164984,lasso-glove
-ppv,binary,0.3609756097560976,lasso-glove
-npv,binary,0.9833795013850416,lasso-glove
-recall,binary,0.8043478260869565,lasso-glove
-precision,binary,0.36097560975609755,lasso-glove
-kap,binary,0.44343649946638214,lasso-glove
-roc_auc,binary,0.9239130434782609,lasso-glove

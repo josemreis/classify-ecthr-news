@@ -13,7 +13,7 @@ tf_path <- paste(parent_dir, "features", "data", "input", "tf_dtm", sep = "/")
 stringdist_path <- paste(parent_dir, "features", "data", "input", "stringdist", sep = "/")
 
 ## Update the labels
-update_labels <- TRUE
+update_labels <- FALSE
 ## source the python script
 if (update_labels) {
   
@@ -111,7 +111,7 @@ ner_counts <- just_ner %>%
 nercounts_added <- arts_data %>%
   left_join(ner_counts)
 
-### country mention ratio
+### country mention ratio -------------------------------------------------------------------------------------------
 ## extract the mentions to countries, standardize them, make a ratio of countries to case country
 ## ner countries
 ner_countries <- just_ner %>%
@@ -135,11 +135,83 @@ countrymatch_added <- nercounts_added %>%
                                       0, 
                                       country_match_ratio))
 
+#### Verbs related vars----------------------------------------------------------------------------------------------
+### given that the issue is time-overlap between rulings for the same countries it is reasonable to encode information about tenses of the verbs
+## Proportion of the following vars:
+# modal vebs ("shall" or "will"): 'prop_md'
+# past tense: 'prop_vbd'
+# past parciple: 'prop_vbn'
+# present: 'prop_vbp'
+# infinitive: 'prop_vb'
+
+if (!file.exists(paste(parent_dir, "model", "data", "interm_data", "verbs_data.csv.gz", sep = "/"))) {
+  
+  #initialize spacy
+  spacyr::spacy_initialize(python_executable = '/home/jmr/anaconda3/bin/python')
+  ## turn text and id to a named vector
+  docs <- arts_data$text %>%
+    set_names(arts_data$article_id)
+  
+  ## parse
+  parsed <- spacy_parse(
+    x = docs, 
+    pos = FALSE, 
+    lemma = FALSE, 
+    entity = FALSE, 
+    tag = TRUE, 
+    dependency = FALSE, 
+    nounphrase = TRUE,
+    multithread = TRUE
+  )
+  
+  ## export
+  just_verbs <- parsed %>%
+    filter(tag %in% c("MD", "VBD", "VBN", "VB", "VBP", "VBZ", "VBG")) %>%
+    rename(article_id = doc_id) %>%
+    group_by(article_id) %>% 
+    mutate(token_n = n()) %>% 
+    ungroup() %>% 
+    group_by(article_id) %>% 
+    mutate(entity_n = n()) %>% 
+    ungroup()
+  
+  write_csv(just_verbs,
+            path = gzfile(paste(parent_dir, "model", "data", "interm_data", "verbs_data.csv.gz", sep = "/")))
+  
+  spacyr::spacy_finalize()
+  
+} else {
+  
+  just_verbs <- read_csv(paste(parent_dir, "model", "data", "interm_data", "verbs_data.csv.gz", sep = "/"))
+  
+}
+
+### count verbs per article id
+verb_counts <- just_verbs %>%
+  select(article_id, tag) %>%
+  mutate(tag = str_to_lower(tag)) %>%
+  count(article_id, tag) %>%
+  pivot_wider(
+    names_from = "tag", 
+    names_prefix = "verb_count_", 
+    values_from = "n", 
+    values_fill = 0
+  ) %>%
+  distinct(article_id, .keep_all = TRUE)
+
+## join
+verbcounts_added <- countrymatch_added %>%
+  left_join(verb_counts) %>%
+  mutate(across(.cols = c(contains("verb_count")), ~.x/article_nchar))
+
+#### some relevant matching vars --------------------------------------------------------------
+### match sentencing/ruling words
+
+
 #### Make the final dataset ----------------------------------------------------------------------
 ### combine
-dataset_all <- countrymatch_added %>%
-  left_join(stringdist)
-
+dataset_all <- verbcounts_added %>%
+  left_join(stringdist) 
 ### modeling data
 model_data <- dataset_all %>%
   filter(!is.na(ecthr_label))

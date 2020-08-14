@@ -1,9 +1,9 @@
 .metric,.estimator,.estimate,model
-bal_accuracy,binary,0.8398829431438127,svm-rbf-wv
-f_meas,binary,0.5632653061224491,svm-rbf-wv
-ppv,binary,0.45098039215686286,svm-rbf-wv
-npv,binary,0.9797356828193832,svm-rbf-wv
+bal_accuracy,binary,0.8407190635451505,svm-rbf-wv
+f_meas,binary,0.5679012345679013,svm-rbf-wv
+ppv,binary,0.4569536423841061,svm-rbf-wv
+npv,binary,0.9797713280562884,svm-rbf-wv
 recall,binary,0.75,svm-rbf-wv
-precision,binary,0.45098039215686275,svm-rbf-wv
-kap,binary,0.5204865556978238,svm-rbf-wv
-roc_auc,binary,0.9406081867093209,svm-rbf-wv
+precision,binary,0.45695364238410596,svm-rbf-wv
+kap,binary,0.5258064516129034,svm-rbf-wv
+roc_auc,binary,0.9399538316126218,svm-rbf-wv
