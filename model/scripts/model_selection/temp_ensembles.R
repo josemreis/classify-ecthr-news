@@ -257,24 +257,27 @@ my_blend <- function(data_stack = NULL, penalty = 10^(-6:-1), verbose = TRUE) {
     rs <- rsample::bootstraps(dat, times = 20)
     
   } else {
+    
     rs <- stacks:::reconstruct_resamples(attr(data_stack, "splits"), 
                                          dat_fixed)
   }
-  candidates <- preds_wf %>% tune::tune_grid(resamples = rs, 
-                                             grid = tibble::tibble(penalty = penalty), metrics = metric, 
-                                             control = tune::control_grid(save_pred = TRUE, extract = get_models))
-  coefs <- model_spec %>% tune::finalize_model(tune::select_best(candidates)) %>% 
-    generics::fit(formula = preds_formula, data = dat_fixed)
-  model_stack <- structure(list(model_defs = attr(data_stack, 
-                                                  "model_defs"), coefs = coefs, metrics = stacks:::glmnet_metrics(candidates), 
-                                equations = stacks:::get_expressions(coefs), cols_map = attr(data_stack, 
-                                                                                             "cols_map"), model_metrics = attr(data_stack, "model_metrics"), 
-                                train = attr(data_stack, "train"), mode = attr(data_stack, 
-                                                                               "mode"), outcome = attr(data_stack, "outcome"), data_stack = dat_fixed, 
-                                splits = attr(data_stack, "splits")), class = c("linear_stack", 
-                                                                                "model_stack", "list"))
+    candidates <- preds_wf %>% tune::tune_grid(resamples = rs, 
+                                               grid = tibble::tibble(penalty = penalty), metrics = metric, 
+                                               control = tune::control_grid(save_pred = TRUE, extract = get_models))
+    coefs <- model_spec %>% tune::finalize_model(tune::select_best(candidates)) %>% 
+      generics::fit(formula = preds_formula, data = dat_fixed)
+    model_stack <- structure(list(model_defs = attr(data_stack, 
+                                                    "model_defs"), coefs = coefs, metrics = stacks:::glmnet_metrics(candidates), 
+                                  equations = stacks:::get_expressions(coefs), cols_map = attr(data_stack, 
+                                                                                               "cols_map"), model_metrics = attr(data_stack, "model_metrics"), 
+                                  train = attr(data_stack, "train"), mode = attr(data_stack, 
+                                                                                 "mode"), outcome = attr(data_stack, "outcome"), data_stack = dat_fixed, 
+                                  splits = attr(data_stack, "splits")), class = c("linear_stack", 
+                                                                                  "model_stack", "list"))
   if (stacks:::model_stack_constr(model_stack)) {
+    
     model_stack
+    
   }
 }
 
