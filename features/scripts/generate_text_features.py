@@ -114,7 +114,7 @@ class text_features():
                 merged = pd.read_csv(self.data_repo + filename, index_col=0)
             return merged
         ### function for filtering decision docs
-        def filter_decision_doc(self, case_id, source_lang_alpha3b, judgment = True, pref_original = True, last_resort_isocode = "FRE"):
+        def filter_decision_doc(self, case_id, source_lang_alpha3b, judgment = True, pref_original = True, last_resort_isocode = "FRE", priority_english = False):
             # case id to app number
             appno = case_id.split("_")[0].replace("/", "_")
             # lang to caps
@@ -145,7 +145,10 @@ class text_features():
                 # Assign the doc metadata given langs and user choices
                 # if available and preferred, assign local language translation
                 if pref_original and len(filter_og) > 0:
-                     out = pd.DataFrame([{'doc_path':filter_og[0], 'source_lang_alpha3_b': source_lang_alpha3b, "case_id": case_id}])
+                    if not priority_english:
+                        out = pd.DataFrame([{'doc_path':filter_og[0], 'source_lang_alpha3_b': source_lang_alpha3b, "case_id": case_id}])
+                    else:
+                        out = pd.DataFrame([{'doc_path':filter_og[0], 'source_lang_alpha3_b': "to_tranlaste", "case_id": case_id}])
                 # missing and available, assign english translation
                 elif len(filter_eng) > 0:
                     print("No files in %s"%source_lang_alpha3b + "\nGoing to use the english version instead\n%")
@@ -166,7 +169,7 @@ class text_features():
                         print(case_id.replace("_", "/") + "\nNo files in %s"%source_lang_alpha3b + " or in english!\nNo way of comparing the texts. Returning a None value\n------\n")
             return out
         ### function for loading the rulings metadata
-        def load_rulings_metadata(self, debug = True):
+        def load_rulings_metadata(self, priority_english = False, debug = True):
             ## logfile
             # start the log file. Remove existing one
             logfile = self.prep_data_logfile
@@ -183,10 +186,10 @@ class text_features():
             missing_list = []
             for index, row in unique_meta.iterrows():
                 ### pull the decision doc metadata
-                decisions_df = self.filter_decision_doc(case_id = row['case_id'], source_lang_alpha3b = row['source_lang_alpha3_b'])
+                decisions_df = self.filter_decision_doc(case_id = row['case_id'], source_lang_alpha3b = row['source_lang_alpha3_b'], priority_english = priority_english)
                 if len(decisions_df[decisions_df.doc_path.notnull()]) < 1:
                     ## missing, try communications of the rulings
-                    decisions_df = self.filter_decision_doc(case_id = row['case_id'], source_lang_alpha3b = row['source_lang_alpha3_b'], judgment = False)
+                    decisions_df = self.filter_decision_doc(case_id = row['case_id'], source_lang_alpha3b = row['source_lang_alpha3_b'], judgment = False, priority_english = priority_english)
                     if len(decisions_df[decisions_df.doc_path.notnull()]) < 1:
                         ## no doc retrieved
                         missing_list.append(row['case_id'])
@@ -261,10 +264,10 @@ class text_features():
                 translated_text = None
             return translated_text
         ## Load rulings text data
-        def load_rulings(self, debug = True, export_csv = False, filename = "interm_data/rulings_data_raw.csv.gz", load_latest = False):
+        def load_rulings(self, debug = True, export_csv = False, priority_english = False, filename = "rulings_data_raw.csv.gz", load_latest = False):
             if not load_latest:
                 ## load the rulings metadata
-                rulings_metadata = self.load_rulings_metadata(debug = False)
+                rulings_metadata = self.load_rulings_metadata(debug = False, priority_english = priority_english)
                 ### For each ruling doc, load the respective json dataset
                 ## if not in engish or local language, translate it
                 # container
@@ -303,22 +306,30 @@ class text_features():
                 out = pd.concat(rulings_container)
                 ## export if requested
                 if export_csv:
+                    if priority_english:
+                        filename = "interm_data/ENG_" + filename
+                    else:
+                        filename = "interm_data" + filename
                     out.to_csv(self.data_repo + filename, compression = "gzip")
             else:
                 ## just load the latest
                 out = pd.read_csv(self.data_repo + filename, index_col=0)
             return out
         ## make_rulArt_dyads
-        def make_rulart_dyads(self, export_csv = False, load_latest = True,  filename = "interm_data/rulings_article_dyad_data_raw.csv.gz"):
+        def make_rulart_dyads(self, export_csv = False, load_latest = True, priority_english = False,  filename = "rulings_article_dyad_data_raw.csv.gz"):
             if not load_latest:
                 ## load articles
                 articles_raw = self.load_articles(export_csv = False, load_latest = True)
                 # load rulings
-                rulings_raw = self.load_rulings(export_csv = False, load_latest = True)
+                rulings_raw = self.load_rulings(export_csv = False, load_latest = True, priority_english = priority_english)
                 ## merge them
                 out = pd.merge(articles_raw, rulings_raw, how = "inner", on = ["case_id", "appno"])
                 # export
                 if export_csv:
+                    if priority_english:
+                        filename = "interm_data/ENG_" + filename
+                    else:
+                        filename = "interm_data" + filename
                     out.to_csv(self.data_repo + filename, compression = "gzip")
             else:
                 ## just load the latest
@@ -479,73 +490,78 @@ class text_features():
 just_label_update = True
 ## Run
 if __name__  == "__main__":
-    ## instantiate prep data class
-    prep = text_features.prep_data()
-    ## load articles
-    if just_label_update:
-        articles_raw = prep.load_articles(export_csv = True, load_latest = False)
-    # load rulings
-    # rulings_raw = prep.load_rulings(export_csv = True, load_latest = False)
-    # load dyads data
-    rulart_dyad = prep.make_rulart_dyads(export_csv = True, load_latest = False).sample(frac = 1) # reshuffle
-    ## if not, generate the features...
-    if not just_label_update:
-        ## instantiate pre_process class
-        proc = text_features.pre_process()
-        for run in range(1, 20):
-            print("\nRun: " + str(run) + "\n")
-            try:
-                for index, row in rulart_dyad.iterrows():
-                    ### If text feature files do not exist, go on
-                    filename = proc.tf_path + "tf" + "_" + row['article_id'] + ".csv.gz"
-                    if not os.path.isfile(filename):
-                        print("\n>> generating text features for:\n - " + row['article_id'] + "\n - " + row["ruling_doc_file"] + "\n")
-                        ## depending on whether the ruling was translated, choose the translated text ("text") or original
-                        # as well as relevant language
-                        if row['ruling_translated'] == 1 or row['ruling_doc_lang'] == "ENG":
-                            text = row['text']
-                            lang = "en"
-                        else:
-                            text = row['text_original']
-                            lang = row['source_lang_alpha2']
-                        ### ** Pre-processing **
-                        if isinstance(text, str) and isinstance(lang, str):
-                            ## tokenize and normalize the article
-                            # tokenize
-                            print("\n>> tokenizing, normalizing and converting to dtm\n")
-                            art_tokenized = proc.tokenize(text = text, lang = lang, case_id = row['case_id'], article_id = row['article_id'])
-                            # normalize
-                            art_normalized = proc.normalize(tokenized_df = art_tokenized, lang = lang, max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"])
-                            ## tokenize and normalize the ruling
-                            # tokenize
-                            ruling_tokenized = proc.tokenize(text = row['ruling_text'], lang = row['ruling_doc_lang'], case_id = row['case_id'])
-                            # normalize
-                            ruling_normalized = proc.normalize(tokenized_df = ruling_tokenized, lang = row['ruling_doc_lang'], max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"])
-                            ### Compute the term frequencies
-                            ## "un-normalized"
-                            ## Compute term frequency (normalized)
-                            tf_raw = proc.tf_dtm(ruling_normalized = ruling_normalized, art_normalized = art_normalized, tf_normalized = False)
-                            ## tf normalized
-                            tf_norm = proc.tf_dtm(ruling_normalized = ruling_normalized, art_normalized = art_normalized, tf_normalized = True)
-                            ### Export both
-                            # write the csvs
-                            tf_raw.to_csv(filename, compression = "gzip")
-                            tf_norm.to_csv(proc.tf_path + "tf-norm" + "_" + row['article_id'] + ".csv.gz", compression = "gzip")
-                            ### ** compute string distances **
-                            print("\n>> calculating string distances\n")
-                            ## cosine similarity (normalized)
-                            cosine_sim_norm = proc.cosine_similarity(tf_norm)
-                            ## jaccard distance
-                            jd = proc.jaccard_similarity(ruling_normalized = ruling_normalized.ngram.tolist(), art_normalized = art_normalized.ngram.tolist())
-                            dist_data = pd.DataFrame([{"cosine_similarity_tf": cosine_sim_norm,
-                                                       "jaccard_distance": jd,
-                                                       "article_id": row['article_id'],
-                                                       "case_id": row['case_id'],
-                                                       "ruling_doc_file": row['ruling_doc_file']}])
-                            print(dist_data[["cosine_similarity_tf", "jaccard_distance", "article_id"]])
-                            print("\nFor the following label\n " + str(row['ecthr_label']))
-                            ## export
-                            dist_file = proc.stringdist_path + "stringdist" + "_" + row['article_id'] + ".csv"
-                            dist_data.to_csv(dist_file)
-            except:
-                pass
+    if not os.path.isfile("/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/data/interm_data/rulings_article_dyad_data_raw.csv.gz"):
+        ## instantiate prep data class
+        prep = text_features.prep_data()
+        ## load articles
+        if just_label_update:
+            articles_raw = prep.load_articles(export_csv = True, load_latest = False)
+        # load rulings
+        # rulings_raw = prep.load_rulings(export_csv = True, load_latest = False)
+        # load dyads data
+        rulart_dyad = prep.make_rulart_dyads(export_csv = True, load_latest = False).sample(frac = 1) # reshuffle
+        ## if not, generate the features...
+        if not just_label_update:
+            ## instantiate pre_process class
+            proc = text_features.pre_process()
+            for run in range(1, 20):
+                print("\nRun: " + str(run) + "\n")
+                try:
+                    for index, row in rulart_dyad.iterrows():
+                        ### If text feature files do not exist, go on
+                        filename = proc.tf_path + "tf" + "_" + row['article_id'] + ".csv.gz"
+                        if not os.path.isfile(filename):
+                            print("\n>> generating text features for:\n - " + row['article_id'] + "\n - " + row["ruling_doc_file"] + "\n")
+                            ## depending on whether the ruling was translated, choose the translated text ("text") or original
+                            # as well as relevant language
+                            if row['ruling_translated'] == 1 or row['ruling_doc_lang'] == "ENG":
+                                text = row['text']
+                                lang = "en"
+                            else:
+                                text = row['text_original']
+                                lang = row['source_lang_alpha2']
+                            ### ** Pre-processing **
+                            if isinstance(text, str) and isinstance(lang, str):
+                                ## tokenize and normalize the article
+                                # tokenize
+                                print("\n>> tokenizing, normalizing and converting to dtm\n")
+                                art_tokenized = proc.tokenize(text = text, lang = lang, case_id = row['case_id'], article_id = row['article_id'])
+                                # normalize
+                                art_normalized = proc.normalize(tokenized_df = art_tokenized, lang = lang, max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"])
+                                ## tokenize and normalize the ruling
+                                # tokenize
+                                ruling_tokenized = proc.tokenize(text = row['ruling_text'], lang = row['ruling_doc_lang'], case_id = row['case_id'])
+                                # normalize
+                                ruling_normalized = proc.normalize(tokenized_df = ruling_tokenized, lang = row['ruling_doc_lang'], max_ngram = 4, keep_stopwords = False, keep_upos = ["VERB", "ADJ", "ADP", "ADV", "DET", "AUX", "NOUN", "NUM", "PRON", "PROPN", "PART"])
+                                ### Compute the term frequencies
+                                ## "un-normalized"
+                                ## Compute term frequency (normalized)
+                                tf_raw = proc.tf_dtm(ruling_normalized = ruling_normalized, art_normalized = art_normalized, tf_normalized = False)
+                                ## tf normalized
+                                tf_norm = proc.tf_dtm(ruling_normalized = ruling_normalized, art_normalized = art_normalized, tf_normalized = True)
+                                ### Export both
+                                # write the csvs
+                                tf_raw.to_csv(filename, compression = "gzip")
+                                tf_norm.to_csv(proc.tf_path + "tf-norm" + "_" + row['article_id'] + ".csv.gz", compression = "gzip")
+                                ### ** compute string distances **
+                                print("\n>> calculating string distances\n")
+                                ## cosine similarity (normalized)
+                                cosine_sim_norm = proc.cosine_similarity(tf_norm)
+                                ## jaccard distance
+                                jd = proc.jaccard_similarity(ruling_normalized = ruling_normalized.ngram.tolist(), art_normalized = art_normalized.ngram.tolist())
+                                dist_data = pd.DataFrame([{"cosine_similarity_tf": cosine_sim_norm,
+                                                           "jaccard_distance": jd,
+                                                           "article_id": row['article_id'],
+                                                           "case_id": row['case_id'],
+                                                           "ruling_doc_file": row['ruling_doc_file']}])
+                                print(dist_data[["cosine_similarity_tf", "jaccard_distance", "article_id"]])
+                                print("\nFor the following label\n " + str(row['ecthr_label']))
+                                ## export
+                                dist_file = proc.stringdist_path + "stringdist" + "_" + row['article_id'] + ".csv"
+                                dist_data.to_csv(dist_file)
+                except:
+                    pass
+    if not os.path.isfile("/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/data/interm_data/ENG_rulings_article_dyad_data_raw.csv.gz"):
+        ## instantiate prep data class
+        prep = text_features.prep_data()
+        

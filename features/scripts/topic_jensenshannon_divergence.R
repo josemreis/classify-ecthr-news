@@ -4,18 +4,32 @@
 require(stm)
 require(tidyverse)
 require(philentropy)
+require(quanteda)
 ### dirs
 parent_dir <- '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news' 
 rulart_dyad_path <- paste(parent_dir, "features", "data", "interm_data", "rulings_article_dyad_data_raw.csv.gz", sep = "/")
 articles_data_path <- paste(parent_dir, "features", "data", "interm_data", "articles_data_raw.csv.gz", sep = "/")
+rulings_data_path <- paste(parent_dir, "features", "data", "interm_data", "rulings_data_raw.csv.gz", sep = "/")
 ### load the data
 rulart_dyad_raw <- read_csv(rulart_dyad_path)
+## load the rulings data
+rulings_data_raw <- read_csv(rulings_data_path)
+#### Wrangling
+#### -------------------------------------------------------------------------------------------
+### We need the dyads article-ruling to be both in english
+## our previous dyads, cosine similarity dyads, gave priority to the original language
+## make english dyads
+eng_rulings <- rulings_data_raw %>%
+  filter(ruling_doc_lang == "ENG") %>%
+  select(-X1)
+## english dyads
+eng_dyads <- right_join(rulart_dyad_raw, eng_rulings)
 
 #### Parameter tunning for topic number
 #### -------------------------------------------------------------------------------------------
-t <- searchK(documents = stm::poliblog5k.docs,
-         vocab = stm::poliblog5k.voc,
-         K = seq(20, 200, by = 25))
+t <- searchK(documents = stm::poliblog5k.docs, 
+             vocab = stm::poliblog5k.voc, 
+             K = seq(20, 200, by = 25))
 
 p <- t$results %>%
   select(-contains("bound")) %>%
