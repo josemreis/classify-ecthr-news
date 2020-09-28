@@ -55,8 +55,8 @@ rm(list = c("dtm", "dtm_trimed"))
 k_tuned <- searchK(
   documents = stm_dtm$documents,
   vocab = stm_dtm$vocab, 
-  K = seq(20, 200, by = 25),
-  cores = 4
+  K = ceiling(seq(20, 170, length.out = 4)),
+  verbose = TRUE
   )
 ### plot the metrics
 p <- k_tuned$results %>%
