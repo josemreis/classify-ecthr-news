@@ -10,11 +10,9 @@ parent_dir <- '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, me
 rulart_dyad_path <- paste(parent_dir, "features", "data", "interm_data", "ENG_rulings_article_dyad_data_raw.csv.gz", sep = "/")
 articles_data_path <- paste(parent_dir, "features", "data", "interm_data", "articles_data_raw.csv.gz", sep = "/")
 rulings_data_path <- paste(parent_dir, "features", "data", "interm_data", "rulings_data_raw.csv.gz", sep = "/")
+jsd_data_path <- '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/data/input/jensen-shannon-div/' 
 ### load the data
 rulart_dyad_raw <- read_csv(rulart_dyad_path)
-## load the rulings data
-rulings_data_raw <- read_csv(rulings_data_path)
-
 #### Wrangling
 #### -------------------------------------------------------------------------------------------
 ### Preping the data for corpus building
@@ -25,15 +23,15 @@ before_corpus <- rulart_dyad_raw %>%
   mutate(id = if_else(id == "text",
                       article_id, 
                       ruling_doc_file)) %>%
-  select(-c(article_id, contains("file")))
-
+  select(-c(article_id, contains("file"))) %>%
+  distinct(id, .keep_all = TRUE)
 ## generate the corpus
-question_corpus <- corpus(dta, 
-                          docid_field = 'corpus_id', 
-                          text_field='response')
+rulart_corpus <- corpus(before_corpus,
+                        docid_field = 'id',
+                        text_field = 'text')
 ## turn to document feature matrix
 dtm <- dfm(
-  question_corpus,
+  rulart_corpus,
   tolower = TRUE,
   stem = TRUE,
   remove = stopwords::data_stopwords_stopwordsiso$en,
@@ -45,7 +43,7 @@ dtm <- dfm(
   padding = TRUE
 )
 # trim
-dtm_trimed <- dfm_trim(dtm, min_docfreq = 0.01, max_docfreq = 0.90, docfreq_type = "prop")
+dtm_trimed <- dfm_trim(dtm, min_docfreq = .01, max_docfreq = 0.90, docfreq_type = "prop")
 # convert to stm
 stm_dtm <- convert(dtm_trimed, to = "stm", docvars = docvars(dtm_trimed))
 # clean up..
@@ -54,9 +52,12 @@ rm(list = c("dtm", "dtm_trimed"))
 #### Parameter tunning for topic number
 #### -------------------------------------------------------------------------------------------
 ### fit several lda's with different K
-k_tuned <- searchK(documents = stm::poliblog5k.docs, 
-             vocab = stm::poliblog5k.voc, 
-             K = seq(20, 200, by = 25))
+k_tuned <- searchK(
+  documents = stm_dtm$documents,
+  vocab = stm_dtm$vocab, 
+  K = seq(20, 200, by = 25),
+  cores = 4
+  )
 ### plot the metrics
 p <- k_tuned$results %>%
   select(-contains("bound")) %>%
@@ -74,11 +75,15 @@ best_k <- t$results %>%
 #### Fit the LDA
 #### ------------------------------------------------------------------------------------------
 ### fit
-lda <- stm(documents = stm::poliblog5k.docs,
-           vocab = stm::poliblog5k.voc,
+lda <- stm(documents = stm_dtm$documents,
+           vocab = stm_dtm$vocab,
+           data = stm_dtm$meta,
            K = best_k$K,
+           max.em.its= 75, # default
+           init.type = "Spectral",
            seed = 1234,
            verbose = TRUE)
+write_rds(lda, '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/models/lda_model.rds')
 
 #### Computing the gamma distances
 #### -------------------------------------------------------------------------------------------
@@ -104,7 +109,10 @@ colnames(jsdmatrix) <- rownames(td_gamma)
 #### ------------------------------------------------------------------------------------------
 ### function extracts the jsd from two documents
 pull_jsd <- function(source_doc, target_doc, jsd_matrix = jsdmatrix){
-  out <- jsd_matrix[source_doc, target_doc]
+  jsd <- jsd_matrix[source_doc, target_doc]
+  out <- tibble(article_id = source_doc,
+                ruling_doc_file = target_doc,
+                jensen_shannon_div = jsd)
   return(out)
 }
 
