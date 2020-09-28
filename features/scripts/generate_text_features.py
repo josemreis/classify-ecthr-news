@@ -114,7 +114,7 @@ class text_features():
                 merged = pd.read_csv(self.data_repo + filename, index_col=0)
             return merged
         ### function for filtering decision docs
-        def filter_decision_doc(self, case_id, source_lang_alpha3b, judgment = True, pref_original = True, last_resort_isocode = "FRE", priority_english = False):
+        def filter_decision_doc(self, case_id, source_lang_alpha3b, judgment = True, pref_original = False, last_resort_isocode = "FRE", priority_english = False):
             # case id to app number
             appno = case_id.split("_")[0].replace("/", "_")
             # lang to caps
@@ -313,6 +313,10 @@ class text_features():
                     out.to_csv(self.data_repo + filename, compression = "gzip")
             else:
                 ## just load the latest
+                 if priority_english:
+                        filename = "interm_data/ENG_" + filename
+                    else:
+                        filename = "interm_data" + filename
                 out = pd.read_csv(self.data_repo + filename, index_col=0)
             return out
         ## make_rulArt_dyads
@@ -332,6 +336,10 @@ class text_features():
                         filename = "interm_data" + filename
                     out.to_csv(self.data_repo + filename, compression = "gzip")
             else:
+                if priority_english:
+                    filename = "interm_data/ENG_" + filename
+                else:
+                    filename = "interm_data" + filename
                 ## just load the latest
                 out = pd.read_csv(self.data_repo + filename, index_col=0)
             return out
