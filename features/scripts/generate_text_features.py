@@ -564,4 +564,11 @@ if __name__  == "__main__":
     if not os.path.isfile("/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/data/interm_data/ENG_rulings_article_dyad_data_raw.csv.gz"):
         ## instantiate prep data class
         prep = text_features.prep_data()
+        ## load articles
+        # load rulings
+        rulings_raw = prep.load_rulings(export_csv = True, load_latest = False, priority_english = True)
+        # load dyads data
+        rulart_dyad = prep.make_rulart_dyads(export_csv = True, load_latest = False, priority_english = True)
+    
+    
         
