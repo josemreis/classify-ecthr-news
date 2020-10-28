@@ -22,12 +22,13 @@ before_corpus <- rulart_dyad_raw %>%
   pivot_longer(cols = -c(appno, contains("id"), contains("file")), names_to = "id", values_to = "text") %>%
   mutate(id = if_else(id == "text",
                       article_id, 
-                      ruling_doc_file)) %>%
-  select(-c(article_id, contains("file"))) %>%
-  distinct(id, .keep_all = TRUE)
+                      ruling_doc_file),
+         id_n = row_number()) %>%
+  unite("id_corpus", c(id, id_n), sep = "_", remove = FALSE) %>%
+  select(-c(article_id, contains("file")))
 ## generate the corpus
 rulart_corpus <- corpus(before_corpus,
-                        docid_field = 'id',
+                        docid_field = 'id_corpus',
                         text_field = 'text')
 ## turn to document feature matrix
 dtm <- dfm(
@@ -51,72 +52,93 @@ rm(list = c("dtm", "dtm_trimed"))
 
 #### Parameter tunning for topic number
 #### -------------------------------------------------------------------------------------------
-### fit several lda's with different K
-k_tuned <- searchK(
-  documents = stm_dtm$documents,
-  vocab = stm_dtm$vocab, 
-  K = ceiling(seq(20, 170, length.out = 4)),
-  verbose = TRUE
+if (!file.exists('/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/plots/tuning_k.pdf')) {
+  ### fit several lda's with different K
+  k_tuned <- searchK(
+    documents = stm_dtm$documents,
+    vocab = stm_dtm$vocab, 
+    K = ceiling(seq(20, 80, length.out = 4)),
+    verbose = TRUE
   )
-### plot the metrics
-p <- k_tuned$results %>%
-  select(-contains("bound")) %>%
-  pivot_longer(cols = c(exclus:residual), names_to = "metric_name", values_to = "metric") %>%
-  ggplot(aes(K, metric, color = factor(metric_name))) +
-  geom_line() + 
-  facet_wrap(~metric_name, scales = "free") + 
-  theme_minimal()
-ggsave(filename = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/plots/tuning_k.pdf',
-       plot = p, device = "pdf")
-## Select best k based on the dispersion test (taddy, 2012) 
-best_k <- t$results %>%
-  filter(residual == min(residual)) 
+  ### plot the metrics
+  p <- k_tuned$results %>%
+    select(-contains("bound")) %>%
+    pivot_longer(cols = c(exclus:residual), names_to = "metric_name", values_to = "metric") %>%
+    ggplot(aes(K, metric, color = factor(metric_name))) +
+    geom_line() + 
+    facet_wrap(~metric_name, scales = "free") + 
+    theme_minimal()
+  ggsave(filename = '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/plots/tuning_k.pdf',
+         plot = p, device = "pdf")
+}
 
 #### Fit the LDA
 #### ------------------------------------------------------------------------------------------
 ### fit
-lda <- stm(documents = stm_dtm$documents,
-           vocab = stm_dtm$vocab,
-           data = stm_dtm$meta,
-           K = best_k$K,
-           max.em.its= 75, # default
-           init.type = "Spectral",
-           seed = 1234,
-           verbose = TRUE)
-write_rds(lda, '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/models/lda_model.rds')
+if (!file.exists('/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/models/lda_model.rds')) {
+  
+  lda <- stm(documents = stm_dtm$documents,
+             vocab = stm_dtm$vocab,
+             data = stm_dtm$meta,
+             K = 80,
+             max.em.its= 100,
+             init.type = "Spectral",
+             seed = 1234,
+             verbose = TRUE)
+  
+  write_rds(lda, '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/models/lda_model.rds')
+  
+} else {
+  
+  lda <- read_rds('/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/models/lda_model.rds')
+  
+  
+}
 
 #### Computing the gamma distances
 #### -------------------------------------------------------------------------------------------
 ### generate a document-topic probability matrix
 td_gamma <- tidytext::tidy(lda, matrix = "gamma",                    
-                 document_names = sample(1:300000, size = 250000)) %>%
-  pivot_wider(
-    id_cols = 1,
-    names_from = topic,
-    values_from = gamma,
-    names_prefix = "prop_topic_"
-  ) %>%
-  column_to_rownames("document")
+               document_names = names(stm_dtm$documents)) %>%
+pivot_wider(
+  id_cols = 1,
+  names_from = topic,
+  values_from = gamma,
+  names_prefix = "prop_topic_"
+) %>%
+  rename(id_corpus = document) %>%
+  mutate(id = str_remove(id_corpus, "_[0-9]+$") %>% str_trim()) %>%
+  distinct(id, .keep_all = TRUE)
 
 ### Compute pairwise distance for each pair of topic-probability vectors (i.e. pairwise document gamma comparison)
 ## method based on Badene-olmodo et al, An initial Analysis of Topic-based Similarity among Scientific Documents based on their Rhetorical Discourse Parts
-jsdmatrix <- JSD(as.matrix(td_gamma))
-# add appropriate ids as rownames and colnames
-rownames(jsdmatrix) <- rownames(td_gamma)
-colnames(jsdmatrix) <- rownames(td_gamma)
-
-#### Generate the features dataset
-#### ------------------------------------------------------------------------------------------
-### function extracts the jsd from two documents
-pull_jsd <- function(source_doc, target_doc, jsd_matrix = jsdmatrix){
-  jsd <- jsd_matrix[source_doc, target_doc]
-  out <- tibble(article_id = source_doc,
-                ruling_doc_file = target_doc,
-                jensen_shannon_div = jsd)
-  return(out)
+# matrix level operation made the laptop crash many times
+# jsdmatrix <- JSD(as.matrix(td_gamma))
+# # add appropriate ids as rownames and colnames
+# rownames(jsdmatrix) <- rownames(td_gamma)
+# colnames(jsdmatrix) <- rownames(td_gamma)
+compute_jsd <- function(gamma_table = td_gamma, article_id, ruling_id, debug = TRUE) {
+  
+  ## pull the relevant topic-prob distributions
+  article_probs <- gamma_table[gamma_table$id == article_id,-c(1, 82)] %>% as.matrix()
+  ruling_probs <- gamma_table[gamma_table$id == ruling_id,-c(1, 82)] %>% as.matrix()
+  ## compute the jensen shannon divergence
+  jsd_scalar <- JSD(rbind(article_probs, ruling_probs))
+  ## jsd tab
+  jsd_tab <- tibble(jsd_score = jsd_scalar,
+                    article_id = article_id,
+                    ruling_doc_file = ruling_id)
+  if (debug){
+    print(jsd_tab)
+  }
+  return(jsd_tab)
 }
 
 ## get the jsd for each article
 # get the row names
-rulart_jsd <- map2_df(eng_dyads$article_id, eng_dyads$ruling_doc_file, ~ pull_jsd(source_doc = .x,
-                                                                                  target_doc = .y))
+rulart_jsd <- map2_df(rulart_dyad_raw$article_id, rulart_dyad_raw$ruling_doc_file, 
+                      ~ compute_jsd(gamma_table = td_gamma, debug = FALSE,
+                                    article_id = .x, ruling_id = .y))
+# export
+write_csv(rulart_jsd,
+          '/home/jmr/Dropbox/Current projects/thesis_papers/transparency, media, and compliance with HR Rulings/ecthr_media&compliance/data/media_data/3_classify_ecthr_news/features/data/input/jsd_scores.csv')

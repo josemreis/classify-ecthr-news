@@ -11,7 +11,7 @@ rulart_dyad_path <- paste(parent_dir, "features", "data", "interm_data", "ruling
 articles_data_path <- paste(parent_dir, "features", "data", "interm_data", "articles_data_raw.csv.gz", sep = "/")
 tf_path <- paste(parent_dir, "features", "data", "input", "tf_dtm", sep = "/")
 stringdist_path <- paste(parent_dir, "features", "data", "input", "stringdist", sep = "/")
-
+jsd_path <- paste(parent_dir, "features", "data", "input", "jsd_scores.csv", sep = "/")
 ## Update the labels
 update_labels <- FALSE
 ## source the python script
@@ -203,22 +203,22 @@ verb_counts <- just_verbs %>%
 verbcounts_added <- countrymatch_added %>%
   left_join(verb_counts) %>%
   mutate(across(.cols = c(contains("verb_count")), ~.x/article_nchar))
-
-#### some relevant matching vars --------------------------------------------------------------
-### match sentencing/ruling words
-
-
-#### Make the final dataset ----------------------------------------------------------------------
-### combine
+## merge
 dataset_all <- verbcounts_added %>%
   left_join(stringdist) 
+
+#### Add the shannon-jensen divergence 
+#### ----------------------------------------------------------------------------------------
+### merge the data
+jsd <- read_csv(jsd_path)
+### left join them
+dataset_all <- left_join(dataset_all, jsd)
 ### modeling data
 model_data <- dataset_all %>%
   filter(!is.na(ecthr_label))
 ## export
 write_csv(model_data,
           path = gzfile(paste(parent_dir, "model", "data", "model_data.csv.gz", sep = "/")))
-
 ### to_predict data
 to_predict_data <- dataset_all %>%
   anti_join(model_data)
